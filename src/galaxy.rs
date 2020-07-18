@@ -1,6 +1,8 @@
 use crate::prelude::*;
 pub use log::*;
 
+use regex::Regex;
+
 fn tokenize(src: &str) -> Vec<&str> {
     src.split_whitespace().collect()
 }
@@ -43,6 +45,7 @@ pub enum Exp {
     Cdr,
     Nil,
     Isnil,
+    Var(u64),
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -142,145 +145,231 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
             tokens,
         }),
         x => {
-            // TODO: Add context error message.
-            let num: i64 = x.parse().context("number parse error")?;
-            Ok(ParseResult {
-                exp: Exp::Num(num),
-                tokens,
-            })
+            if x.as_bytes()[0] == b':' {
+                let var_id: u64 = x[1..].parse()?;
+                Ok(ParseResult {
+                    exp: Exp::Var(var_id),
+                    tokens,
+                })
+            } else {
+                // TODO: Add context error message.
+                let num: i64 = x.parse().context("number parse error")?;
+                Ok(ParseResult {
+                    exp: Exp::Num(num),
+                    tokens,
+                })
+            }
         }
     }
 }
 
-fn eval(exp: Exp) -> Result<EvalResult> {
-    // println!("eval: {:?}", exp);
-    match exp {
-        Exp::Num(n) => Ok(EvalResult::Num(n)),
-        Exp::Ap(left, right) => {
-            // TODO: Don't eval right hand if we don't use it.
-            // e.g. app app t 1 long-expression  => we don't need to eval long-expression
-            let left = eval(*left)?;
-            let right = eval(*right)?;
-            apply(left, right)
-        }
-        Exp::Add => Ok(EvalResult::Func(Exp::Add)),
-        Exp::Mul => Ok(EvalResult::Func(Exp::Mul)),
-        Exp::Div => Ok(EvalResult::Func(Exp::Div)),
-        Exp::Eq => Ok(EvalResult::Func(Exp::Eq)),
-        Exp::Lt => Ok(EvalResult::Func(Exp::Lt)),
-        Exp::Neg => Ok(EvalResult::Func(Exp::Neg)),
-        Exp::Inc => Ok(EvalResult::Func(Exp::Inc)),
-        Exp::Dec => Ok(EvalResult::Func(Exp::Dec)),
-        Exp::S => Ok(EvalResult::Func(Exp::S)),
-        Exp::C => Ok(EvalResult::Func(Exp::C)),
-        Exp::B => Ok(EvalResult::Func(Exp::B)),
-        Exp::T => Ok(EvalResult::Func(Exp::T)),
-        Exp::F => Ok(EvalResult::Func(Exp::F)),
-        Exp::I => Ok(EvalResult::Func(Exp::I)),
-        Exp::Cons => Ok(EvalResult::Func(Exp::Cons)),
-        Exp::Car => Ok(EvalResult::Func(Exp::Car)),
-        Exp::Cdr => Ok(EvalResult::Func(Exp::Cdr)),
-        Exp::Nil => Ok(EvalResult::Func(Exp::Nil)),
-        Exp::Isnil => Ok(EvalResult::Func(Exp::Isnil)),
-    }
+struct Galaxy {
+    galaxy_id: u64,
+    variables: HashMap<u64, Exp>,
+    results: HashMap<u64, EvalResult>,
 }
 
-fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
-    // println!("apply: f: {:?}, x0: {:?}", f, x0);
-    match f {
-        EvalResult::Func(exp) => match (exp, x0) {
-            (Exp::Neg, EvalResult::Num(n)) => Ok(EvalResult::Num(-n)),
-            (Exp::Neg, _) => bail!("can not apply"),
-            (Exp::Inc, EvalResult::Num(n)) => Ok(EvalResult::Num(n + 1)),
-            (Exp::Inc, _) => bail!("can not apply"),
-            (Exp::Dec, EvalResult::Num(n)) => Ok(EvalResult::Num(n - 1)),
-            (Exp::Dec, _) => bail!("can not apply"),
-            (Exp::I, x0) => Ok(x0),
-            // ap car x2 = ap x2 t
-            (Exp::Car, x0) => apply(x0, EvalResult::Func(Exp::T)),
-            (Exp::Cdr, x0) => apply(x0, EvalResult::Func(Exp::F)),
-            (Exp::Nil, _) => Ok(EvalResult::Func(Exp::T)),
-            (Exp::Isnil, EvalResult::Func(Exp::Nil)) => Ok(EvalResult::Func(Exp::T)),
-            (Exp::Isnil, _) => Ok(EvalResult::Func(Exp::F)),
-            (exp, x0) => Ok(EvalResult::PartialAp1(exp, Box::new(x0))),
-        },
-        EvalResult::PartialAp1(exp, op0) => match (exp, *op0, x0) {
-            (Exp::Add, EvalResult::Num(n1), EvalResult::Num(n2)) => Ok(EvalResult::Num(n1 + n2)),
-            (Exp::Mul, EvalResult::Num(n1), EvalResult::Num(n2)) => Ok(EvalResult::Num(n1 * n2)),
-            (Exp::Div, EvalResult::Num(n1), EvalResult::Num(n2)) => Ok(EvalResult::Num(n1 / n2)),
-            (Exp::Eq, EvalResult::Num(n1), EvalResult::Num(n2)) => {
-                if n1 == n2 {
-                    Ok(EvalResult::Func(Exp::T))
-                } else {
-                    Ok(EvalResult::Func(Exp::F))
-                }
-            }
-            (Exp::Lt, EvalResult::Num(n1), EvalResult::Num(n2)) => {
-                if n1 < n2 {
-                    Ok(EvalResult::Func(Exp::T))
-                } else {
-                    Ok(EvalResult::Func(Exp::F))
-                }
-            }
-            (Exp::S, x0, x1) => Ok(EvalResult::PartialAp2(Exp::S, Box::new(x0), Box::new(x1))),
-            (Exp::C, x0, x1) => Ok(EvalResult::PartialAp2(Exp::C, Box::new(x0), Box::new(x1))),
-            (Exp::B, x0, x1) => Ok(EvalResult::PartialAp2(Exp::B, Box::new(x0), Box::new(x1))),
-            (Exp::T, x0, _) => Ok(x0),
-            (Exp::F, _, x1) => Ok(x1),
-            (Exp::Cons, x0, x1) => Ok(EvalResult::PartialAp2(
-                Exp::Cons,
-                Box::new(x0),
-                Box::new(x1),
-            )),
-            (exp, x0, x1) => bail!("can not apply: exp: {:?}, x0: {:?}, x1: {:?}", exp, x0, x1),
-        },
-        EvalResult::PartialAp2(exp, op0, op1) => match (exp, *op0, *op1, x0) {
-            (Exp::S, x0, x1, x2) => {
-                // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
-                // ap ap ap s add inc 1   =   3
+impl Galaxy {
+    fn new_for_test(src: &str) -> Result<Galaxy> {
+        let exp = parse_src(src)?;
+        Ok(Galaxy {
+            galaxy_id: 1,
+            variables: {
+                let mut map = HashMap::new();
+                map.insert(1, exp);
+                map
+            },
+            results: HashMap::new(),
+        })
+    }
 
-                // TODO: Avoid clone. Use Rc?
-                let ap_x0_x2 = apply(x0, x2.clone())?;
-                let ap_x1_x2 = apply(x1, x2)?;
-                apply(ap_x0_x2, ap_x1_x2)
+    fn eval_galaxy(&mut self) -> Result<EvalResult> {
+        self.eval(self.variables[&self.galaxy_id].clone())
+    }
+
+    fn new(src: &str) -> Result<Galaxy> {
+        let lines = src.trim().split('\n').collect::<Vec<_>>();
+        println!("last line: {}", lines[lines.len() - 1]);
+
+        // assert_eq!(lines.len(), 393);
+
+        let galaxy_line_re = Regex::new(r"galaxy *= :*(\d+)$").unwrap();
+        let cap = galaxy_line_re.captures(lines[lines.len() - 1]).unwrap();
+        let galaxy_id: u64 = cap[1].parse()?;
+        println!("galaxy_id: {}", galaxy_id);
+
+        Ok(Galaxy {
+            galaxy_id,
+            variables: {
+                let mut map = HashMap::new();
+                let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
+
+                for line in lines.iter().take(lines.len() - 1) {
+                    let cap = re.captures(line).unwrap();
+                    map.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?);
+                    // println!("{}, {}", &cap[1], &cap[2]);
+                }
+                map
+            },
+            results: HashMap::new(),
+        })
+    }
+
+    fn eval(&mut self, exp: Exp) -> Result<EvalResult> {
+        // println!("eval: {:?}", exp);
+        match exp {
+            Exp::Num(n) => Ok(EvalResult::Num(n)),
+            Exp::Ap(left, right) => {
+                // TODO: Don't eval right hand if we don't use it.
+                // e.g. app app t 1 long-expression  => we don't need to eval long-expression
+                let left = self.eval(*left)?;
+                let right = self.eval(*right)?;
+                self.apply(left, right)
             }
-            (Exp::C, x0, x1, x2) => {
-                // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
-                // ap ap ap c add 1 2   =   3
-                apply(apply(x0, x2)?, x1)
+            Exp::Add => Ok(EvalResult::Func(Exp::Add)),
+            Exp::Mul => Ok(EvalResult::Func(Exp::Mul)),
+            Exp::Div => Ok(EvalResult::Func(Exp::Div)),
+            Exp::Eq => Ok(EvalResult::Func(Exp::Eq)),
+            Exp::Lt => Ok(EvalResult::Func(Exp::Lt)),
+            Exp::Neg => Ok(EvalResult::Func(Exp::Neg)),
+            Exp::Inc => Ok(EvalResult::Func(Exp::Inc)),
+            Exp::Dec => Ok(EvalResult::Func(Exp::Dec)),
+            Exp::S => Ok(EvalResult::Func(Exp::S)),
+            Exp::C => Ok(EvalResult::Func(Exp::C)),
+            Exp::B => Ok(EvalResult::Func(Exp::B)),
+            Exp::T => Ok(EvalResult::Func(Exp::T)),
+            Exp::F => Ok(EvalResult::Func(Exp::F)),
+            Exp::I => Ok(EvalResult::Func(Exp::I)),
+            Exp::Cons => Ok(EvalResult::Func(Exp::Cons)),
+            Exp::Car => Ok(EvalResult::Func(Exp::Car)),
+            Exp::Cdr => Ok(EvalResult::Func(Exp::Cdr)),
+            Exp::Nil => Ok(EvalResult::Func(Exp::Nil)),
+            Exp::Isnil => Ok(EvalResult::Func(Exp::Isnil)),
+            Exp::Var(n) => self.eval_var(n),
+        }
+    }
+
+    fn eval_var(&mut self, variable_id: u64) -> Result<EvalResult> {
+        if let Some(result) = self.results.get(&variable_id) {
+            Ok(result.clone())
+        } else {
+            let result = self.eval(self.variables[&variable_id].clone())?;
+            self.results.insert(variable_id, result.clone());
+            Ok(result)
+        }
+    }
+
+    fn apply(&mut self, f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
+        // println!("apply: f: {:?}, x0: {:?}", f, x0);
+        match f {
+            EvalResult::Func(exp) => match (exp, x0) {
+                (Exp::Neg, EvalResult::Num(n)) => Ok(EvalResult::Num(-n)),
+                (Exp::Neg, _) => bail!("can not apply"),
+                (Exp::Inc, EvalResult::Num(n)) => Ok(EvalResult::Num(n + 1)),
+                (Exp::Inc, _) => bail!("can not apply"),
+                (Exp::Dec, EvalResult::Num(n)) => Ok(EvalResult::Num(n - 1)),
+                (Exp::Dec, _) => bail!("can not apply"),
+                (Exp::I, x0) => Ok(x0),
+                // ap car x2 = ap x2 t
+                (Exp::Car, x0) => self.apply(x0, EvalResult::Func(Exp::T)),
+                (Exp::Cdr, x0) => self.apply(x0, EvalResult::Func(Exp::F)),
+                (Exp::Nil, _) => Ok(EvalResult::Func(Exp::T)),
+                (Exp::Isnil, EvalResult::Func(Exp::Nil)) => Ok(EvalResult::Func(Exp::T)),
+                (Exp::Isnil, _) => Ok(EvalResult::Func(Exp::F)),
+                (exp, x0) => Ok(EvalResult::PartialAp1(exp, Box::new(x0))),
+            },
+            EvalResult::PartialAp1(exp, op0) => match (exp, *op0, x0) {
+                (Exp::Add, EvalResult::Num(n1), EvalResult::Num(n2)) => {
+                    Ok(EvalResult::Num(n1 + n2))
+                }
+                (Exp::Mul, EvalResult::Num(n1), EvalResult::Num(n2)) => {
+                    Ok(EvalResult::Num(n1 * n2))
+                }
+                (Exp::Div, EvalResult::Num(n1), EvalResult::Num(n2)) => {
+                    Ok(EvalResult::Num(n1 / n2))
+                }
+                (Exp::Eq, EvalResult::Num(n1), EvalResult::Num(n2)) => {
+                    if n1 == n2 {
+                        Ok(EvalResult::Func(Exp::T))
+                    } else {
+                        Ok(EvalResult::Func(Exp::F))
+                    }
+                }
+                (Exp::Lt, EvalResult::Num(n1), EvalResult::Num(n2)) => {
+                    if n1 < n2 {
+                        Ok(EvalResult::Func(Exp::T))
+                    } else {
+                        Ok(EvalResult::Func(Exp::F))
+                    }
+                }
+                (Exp::S, x0, x1) => Ok(EvalResult::PartialAp2(Exp::S, Box::new(x0), Box::new(x1))),
+                (Exp::C, x0, x1) => Ok(EvalResult::PartialAp2(Exp::C, Box::new(x0), Box::new(x1))),
+                (Exp::B, x0, x1) => Ok(EvalResult::PartialAp2(Exp::B, Box::new(x0), Box::new(x1))),
+                (Exp::T, x0, _) => Ok(x0),
+                (Exp::F, _, x1) => Ok(x1),
+                (Exp::Cons, x0, x1) => Ok(EvalResult::PartialAp2(
+                    Exp::Cons,
+                    Box::new(x0),
+                    Box::new(x1),
+                )),
+                (exp, x0, x1) => bail!("can not apply: exp: {:?}, x0: {:?}, x1: {:?}", exp, x0, x1),
+            },
+            EvalResult::PartialAp2(exp, op0, op1) => match (exp, *op0, *op1, x0) {
+                (Exp::S, x0, x1, x2) => {
+                    // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
+                    // ap ap ap s add inc 1   =   3
+
+                    // TODO: Avoid clone. Use Rc?
+                    let ap_x0_x2 = self.apply(x0, x2.clone())?;
+                    let ap_x1_x2 = self.apply(x1, x2)?;
+                    self.apply(ap_x0_x2, ap_x1_x2)
+                }
+                (Exp::C, x0, x1, x2) => {
+                    // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
+                    // ap ap ap c add 1 2   =   3
+                    let r1 = self.apply(x0, x2)?;
+                    self.apply(r1, x1)
+                }
+                (Exp::B, x0, x1, x2) => {
+                    // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
+                    // ap ap ap b inc dec x0   =   x0
+                    let r1 = self.apply(x1, x2)?;
+                    self.apply(x0, r1)
+                }
+                (Exp::Cons, x0, x1, x2) => {
+                    // cons
+                    // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
+                    let r1 = self.apply(x2, x0)?;
+                    self.apply(r1, x1)
+                }
+                _ => bail!("can not apply"),
+            },
+            x => {
+                bail!("can not apply: {:?}", x);
             }
-            (Exp::B, x0, x1, x2) => {
-                // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
-                // ap ap ap b inc dec x0   =   x0
-                apply(x0, apply(x1, x2)?)
-            }
-            (Exp::Cons, x0, x1, x2) => {
-                // cons
-                // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
-                apply(apply(x2, x0)?, x1)
-            }
-            _ => bail!("can not apply"),
-        },
-        x => {
-            bail!("can not apply: {:?}", x);
         }
     }
 }
 
 pub fn eval_src(src: &str) -> Result<EvalResult> {
-    let exp = parse_src(src)?;
-    eval(exp)
+    // let exp = parse_src(src)?;
+    // eval(exp)
+    let mut galaxy = Galaxy::new_for_test(src)?;
+    galaxy.eval_galaxy()
 }
 
 pub fn run_galaxy(src: &str) -> Result<()> {
-    let lines = src.trim().split('\n').collect::<Vec<_>>();
+    let _galaxy = Galaxy::new(src)?;
 
-    println!("last line: {}", lines[lines.len() - 1]);
-
-    assert_eq!(lines.len(), 393);
+    // let initial_state = EvalResult::Func(Expr::Nil);
+    // let initial_point = todo!(); // (0, 0)
 
     Ok(())
 }
+
+// fn send(s: &str) -> String {
+//     todo!()
+// }
 
 #[cfg(test)]
 mod tests {
@@ -438,6 +527,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[test]
     fn run_galaxy_test() -> Result<()> {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
