@@ -1,3 +1,4 @@
+pub mod galaxy;
 mod prelude;
 
 pub use crate::prelude::Context;
