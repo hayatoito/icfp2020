@@ -52,8 +52,8 @@ pub enum Exp {
 pub enum Value {
     Num(i64),
     Func(Exp),
-    PartialAp1(Exp, Box<Value>),
-    PartialAp2(Exp, Box<Value>, Box<Value>),
+    PartialAp1(Exp, Exp),
+    PartialAp2(Exp, Exp, Exp),
 }
 
 fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
@@ -191,9 +191,6 @@ impl Galaxy {
     fn new(src: &str) -> Result<Galaxy> {
         let lines = src.trim().split('\n').collect::<Vec<_>>();
         println!("last line: {}", lines[lines.len() - 1]);
-
-        // assert_eq!(lines.len(), 393);
-
         let galaxy_line_re = Regex::new(r"galaxy *= :*(\d+)$").unwrap();
         let cap = galaxy_line_re.captures(lines[lines.len() - 1]).unwrap();
         let galaxy_id: u64 = cap[1].parse()?;
@@ -206,7 +203,7 @@ impl Galaxy {
                 let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
 
                 for line in lines.iter().take(lines.len() - 1) {
-                    println!("process: line: {}", line);
+                    println!("parse: line: {}", line);
                     let cap = re.captures(line).unwrap();
                     map.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?);
                     // println!("{}, {}", &cap[1], &cap[2]);
@@ -218,16 +215,10 @@ impl Galaxy {
     }
 
     fn eval(&mut self, exp: Exp) -> Result<Value> {
-        // println!("eval: {:?}", exp);
+        println!("eval: {:?}", exp);
         match exp {
             Exp::Num(n) => Ok(Value::Num(n)),
-            Exp::Ap(left, right) => {
-                // TODO: Don't eval right hand if we don't use it.
-                // e.g. app app t 1 long-expression  => we don't need to eval long-expression
-                let left = self.eval(*left)?;
-                let right = self.eval(*right)?;
-                self.apply(left, right)
-            }
+            Exp::Ap(left, right) => self.apply(*left, *right),
             Exp::Add => Ok(Value::Func(Exp::Add)),
             Exp::Mul => Ok(Value::Func(Exp::Mul)),
             Exp::Div => Ok(Value::Func(Exp::Div)),
@@ -261,84 +252,112 @@ impl Galaxy {
         }
     }
 
-    fn apply(&mut self, f: Value, x0: Value) -> Result<Value> {
-        // println!("apply: f: {:?}, x0: {:?}", f, x0);
-        match f {
-            Value::Func(exp) => match (exp, x0) {
-                (Exp::Neg, Value::Num(n)) => Ok(Value::Num(-n)),
-                (Exp::Neg, _) => bail!("can not apply"),
-                (Exp::Inc, Value::Num(n)) => Ok(Value::Num(n + 1)),
-                (Exp::Inc, _) => bail!("can not apply"),
-                (Exp::Dec, Value::Num(n)) => Ok(Value::Num(n - 1)),
-                (Exp::Dec, _) => bail!("can not apply"),
-                (Exp::I, x0) => Ok(x0),
-                // ap car x2 = ap x2 t
-                (Exp::Car, x0) => self.apply(x0, Value::Func(Exp::T)),
-                (Exp::Cdr, x0) => self.apply(x0, Value::Func(Exp::F)),
-                (Exp::Nil, _) => Ok(Value::Func(Exp::T)),
-                (Exp::Isnil, Value::Func(Exp::Nil)) => Ok(Value::Func(Exp::T)),
-                (Exp::Isnil, _) => Ok(Value::Func(Exp::F)),
-                (exp, x0) => Ok(Value::PartialAp1(exp, Box::new(x0))),
-            },
-            Value::PartialAp1(exp, op0) => match (exp, *op0, x0) {
-                (Exp::Add, Value::Num(n1), Value::Num(n2)) => Ok(Value::Num(n1 + n2)),
-                (Exp::Mul, Value::Num(n1), Value::Num(n2)) => Ok(Value::Num(n1 * n2)),
-                (Exp::Div, Value::Num(n1), Value::Num(n2)) => Ok(Value::Num(n1 / n2)),
-                (Exp::Eq, Value::Num(n1), Value::Num(n2)) => {
-                    if n1 == n2 {
-                        Ok(Value::Func(Exp::T))
-                    } else {
-                        Ok(Value::Func(Exp::F))
-                    }
-                }
-                (Exp::Lt, Value::Num(n1), Value::Num(n2)) => {
-                    if n1 < n2 {
-                        Ok(Value::Func(Exp::T))
-                    } else {
-                        Ok(Value::Func(Exp::F))
-                    }
-                }
-                (Exp::S, x0, x1) => Ok(Value::PartialAp2(Exp::S, Box::new(x0), Box::new(x1))),
-                (Exp::C, x0, x1) => Ok(Value::PartialAp2(Exp::C, Box::new(x0), Box::new(x1))),
-                (Exp::B, x0, x1) => Ok(Value::PartialAp2(Exp::B, Box::new(x0), Box::new(x1))),
-                (Exp::T, x0, _) => Ok(x0),
-                (Exp::F, _, x1) => Ok(x1),
-                (Exp::Cons, x0, x1) => Ok(Value::PartialAp2(Exp::Cons, Box::new(x0), Box::new(x1))),
-                (exp, x0, x1) => bail!("can not apply: exp: {:?}, x0: {:?}, x1: {:?}", exp, x0, x1),
-            },
-            Value::PartialAp2(exp, op0, op1) => match (exp, *op0, *op1, x0) {
-                (Exp::S, x0, x1, x2) => {
-                    // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
-                    // ap ap ap s add inc 1   =   3
+    // fn apply(&mut self, f: Value, x0: Value) -> Result<Value> {
 
-                    // TODO: Avoid clone. Use Rc?
-                    let ap_x0_x2 = self.apply(x0, x2.clone())?;
-                    let ap_x1_x2 = self.apply(x1, x2)?;
-                    self.apply(ap_x0_x2, ap_x1_x2)
-                }
-                (Exp::C, x0, x1, x2) => {
-                    // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
-                    // ap ap ap c add 1 2   =   3
-                    let r1 = self.apply(x0, x2)?;
-                    self.apply(r1, x1)
-                }
-                (Exp::B, x0, x1, x2) => {
-                    // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
-                    // ap ap ap b inc dec x0   =   x0
-                    let r1 = self.apply(x1, x2)?;
-                    self.apply(x0, r1)
-                }
-                (Exp::Cons, x0, x1, x2) => {
-                    // cons
-                    // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
-                    let r1 = self.apply(x2, x0)?;
-                    self.apply(r1, x1)
-                }
-                _ => bail!("can not apply"),
+    fn apply(&mut self, f: Exp, x0: Exp) -> Result<Value> {
+        // println!("apply: f: {:?}, x0: {:?}", f, x0);
+        let f = self.eval(f)?;
+        match f {
+            Value::Func(exp) => match exp {
+                Exp::Neg => match self.eval(x0)? {
+                    Value::Num(n) => Ok(Value::Num(-n)),
+                    _ => bail!("can not apply"),
+                },
+                Exp::Inc => match self.eval(x0)? {
+                    Value::Num(n) => Ok(Value::Num(n + 1)),
+                    _ => bail!("can not apply"),
+                },
+                Exp::Dec => match self.eval(x0)? {
+                    Value::Num(n) => Ok(Value::Num(n - 1)),
+                    _ => bail!("can not apply"),
+                },
+                Exp::I => self.eval(x0),
+                // ap car x2 = ap x2 t
+                Exp::Car => self.apply(x0, Exp::T),
+                Exp::Cdr => self.apply(x0, Exp::F),
+                Exp::Nil => Ok(Value::Func(Exp::T)),
+                Exp::Isnil => match self.eval(x0)? {
+                    Value::Func(Exp::Nil) => Ok(Value::Func(Exp::T)),
+                    _ => Ok(Value::Func(Exp::F)),
+                },
+                exp => Ok(Value::PartialAp1(exp, x0)),
             },
-            x => {
-                bail!("can not apply: {:?}", x);
+            Value::PartialAp1(exp, e0) => {
+                let e1 = x0; // For readability.
+                match exp {
+                    Exp::Add => match (self.eval(e0)?, self.eval(e1)?) {
+                        (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 + n1)),
+                        _ => bail!("can not apply"),
+                    },
+                    Exp::Mul => match (self.eval(e0)?, self.eval(e1)?) {
+                        (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 * n1)),
+                        _ => bail!("can not apply"),
+                    },
+                    Exp::Div => match (self.eval(e0)?, self.eval(e1)?) {
+                        (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 / n1)),
+                        _ => bail!("can not apply"),
+                    },
+                    Exp::Eq => match (self.eval(e0)?, self.eval(e1)?) {
+                        (Value::Num(n0), Value::Num(n1)) => {
+                            if n0 == n1 {
+                                Ok(Value::Func(Exp::T))
+                            } else {
+                                Ok(Value::Func(Exp::F))
+                            }
+                        }
+                        _ => bail!("can not apply"),
+                    },
+                    Exp::Lt => match (self.eval(e0)?, self.eval(e1)?) {
+                        (Value::Num(n0), Value::Num(n1)) => {
+                            if n0 < n1 {
+                                Ok(Value::Func(Exp::T))
+                            } else {
+                                Ok(Value::Func(Exp::F))
+                            }
+                        }
+                        _ => bail!("can not apply"),
+                    },
+                    Exp::S => Ok(Value::PartialAp2(Exp::S, e0, e1)),
+                    Exp::C => Ok(Value::PartialAp2(Exp::C, e0, e1)),
+                    Exp::B => Ok(Value::PartialAp2(Exp::B, e0, e1)),
+                    Exp::T => self.eval(e0),
+                    // New
+                    Exp::F => self.eval(e1),
+                    Exp::Cons => Ok(Value::PartialAp2(Exp::Cons, e0, e1)),
+                    exp => bail!("can not apply: exp: {:?}, e0: {:?}, e1: {:?}", exp, e0, e1),
+                }
             }
+            Value::PartialAp2(exp, e0, e1) => {
+                let e2 = x0;
+                match exp {
+                    Exp::S => {
+                        // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
+                        // ap ap ap s add inc 1   =   3
+
+                        // TODO: Avoid clone. Use Rc?
+                        let ap_x0_x2 = Exp::Ap(Box::new(e0), Box::new(e2.clone()));
+                        let ap_x1_x2 = Exp::Ap(Box::new(e1), Box::new(e2));
+                        self.apply(ap_x0_x2, ap_x1_x2)
+                    }
+                    Exp::C => {
+                        // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
+                        // ap ap ap c add 1 2   =   3
+                        self.apply(Exp::Ap(Box::new(e0), Box::new(e2)), e1)
+                    }
+                    Exp::B => {
+                        // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
+                        // ap ap ap b inc dec x0   =   x0
+                        self.apply(e0, Exp::Ap(Box::new(e1), Box::new(e2)))
+                    }
+                    Exp::Cons => {
+                        // cons
+                        // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
+                        self.apply(Exp::Ap(Box::new(e2), Box::new(e0)), e1)
+                    }
+                    _ => bail!("can not apply"),
+                }
+            }
+            Value::Num(_) => bail!("can not apply"),
         }
     }
 }
@@ -353,15 +372,6 @@ pub fn eval_src(src: &str) -> Result<Value> {
 pub fn eval_galaxy_src(src: &str) -> Result<Value> {
     let mut galaxy = Galaxy::new(src)?;
     galaxy.eval_galaxy()
-}
-
-pub fn run_galaxy(src: &str) -> Result<()> {
-    let _galaxy = Galaxy::new(src)?;
-
-    // let initial_state = EvalResult::Func(Expr::Nil);
-    // let initial_point = todo!(); // (0, 0)
-
-    Ok(())
 }
 
 // fn send(s: &str) -> String {
@@ -548,12 +558,52 @@ galaxy = :2
         Ok(())
     }
 
-    #[ignore]
+    #[test]
+    fn eval_recursive_func_test() -> Result<()> {
+        // From video part2
+        // https://www.youtube.com/watch?v=oU4RAEQCTDE
+        let src = ":1 = ap f :1
+:2 = ap :1 42
+galaxy = :2
+";
+        assert_eq!(eval_galaxy_src(src)?, Value::Num(42));
+
+        let src = ":1 = ap :1 1
+:2 = ap ap t 42 :1
+galaxy = :2
+";
+        assert_eq!(eval_galaxy_src(src)?, Value::Num(42));
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_recursive_func_1141_test() -> Result<()> {
+        // :1141 = ap ap c b ap ap s ap ap b c ap ap b ap b b ap eq 0 ap ap b ap c :1141 ap add -1
+
+        // Ap(Ap(C, B),
+        //    Ap(Ap(S,
+        //          Ap(Ap(B, C),
+        //             Ap(Ap(B, Ap(B, B)),
+        //                Ap(Eq, Num(0))))),
+        //       Ap(Ap(B,
+        //             Ap(C,
+        //                Var(1141))),
+        //          Ap(Add, Num(-1)))))
+
+        let src = ":1141 = ap ap c b ap ap s ap ap b c ap ap b ap b b ap eq 0 ap ap b ap c :1141 ap add -1
+galaxy = :1141
+";
+        println!("1141 result: {:?}", eval_galaxy_src(&src));
+        Ok(())
+    }
+
     #[test]
     fn run_galaxy_test() -> Result<()> {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("task/galaxy.txt");
         let src = std::fs::read_to_string(path)?.trim().to_string();
-        run_galaxy(&src)
+        println!("galaxy result: {:?}", eval_galaxy_src(&src));
+        Ok(())
     }
 }
