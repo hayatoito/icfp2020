@@ -1,82 +1,36 @@
-use icfp2020::{Context as _, Result};
+use reqwest::StatusCode;
+use std::io::Read;
 
-use chrono::Local;
-use std::io::Write as _;
-use structopt::StructOpt;
-
-fn parse_i32_with_context(s: &str) -> Result<i32> {
-    s.parse().with_context(|| format!("can not parse: {}", s))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn main_test_dummy() {
-        assert_eq!(0, 0);
-        assert_eq!(parse_i32_with_context("1").unwrap(), 1);
-    }
-}
-
-#[derive(StructOpt, Debug)]
-struct Cli {
-    /// Sets the level of verbosity
-    #[structopt(short = "v", parse(from_occurrences))]
-    verbose: u64,
-    #[structopt(subcommand)]
-    cmd: Command,
-}
-
-#[derive(StructOpt, Debug)]
-enum Command {
-    #[structopt(name = "hello")]
-    Hello {
-        #[structopt(name = "arg")]
-        arg: String,
-    },
-}
-
-#[allow(dead_code)]
-fn env_logger_verbose_init() {
-    env_logger::builder()
-        .format(|buf, record| {
-            writeln!(
-                buf,
-                "[{} {:5} {}] ({}:{}) {}",
-                Local::now().format("%+"),
-                // record.level(),
-                buf.default_styled_level(record.level()),
-                record.target(),
-                record.file().unwrap_or("unknown"),
-                record.line().unwrap_or(0),
-                record.args(),
-            )
-        })
-        .init();
-}
+type Result<T> = anyhow::Result<T>;
 
 fn main() -> Result<()> {
-    println!("Hello, world!");
+    let args: Vec<String> = std::env::args().collect();
 
-    let args = Cli::from_args();
-    if args.verbose > 0 {
-        env_logger_verbose_init();
-    } else {
-        env_logger::init();
-    }
+    assert!(args.len() >= 3);
 
-    log::error!("error");
-    log::warn!("warn");
-    log::info!("info");
-    log::debug!("debug");
-    log::trace!("trace");
+    let server_url = &args[1];
+    let player_key = &args[2];
 
-    match args.cmd {
-        Command::Hello { arg } => {
-            println!("Hello {}", arg);
-            assert_eq!(parse_i32_with_context("1")?, 1);
+    println!("ServerUrl: {}; PlayerKey: {}", server_url, player_key);
+
+    let client = reqwest::blocking::Client::new();
+    let mut response = client.post(server_url).body(player_key.clone()).send()?;
+
+    match response.status() {
+        StatusCode::OK => {
+            let mut content = String::new();
+            response.read_to_string(&mut content)?;
+            println!("{}", content);
+        }
+        _ => {
+            println!("Unexpected server response:");
+            println!("HTTP code: {}", response.status());
+            let mut content = String::new();
+            response.read_to_string(&mut content)?;
+            println!("{}", content);
+            std::process::exit(2);
         }
     }
+
     Ok(())
 }
