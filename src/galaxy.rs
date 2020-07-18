@@ -38,6 +38,9 @@ pub enum Exp {
     T, // True
     F, // False,
     I,
+    Cons,
+    Car,
+    Cdr,
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -121,6 +124,18 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
             exp: Exp::I,
             tokens,
         }),
+        "cons" => Ok(ParseResult {
+            exp: Exp::Cons,
+            tokens,
+        }),
+        "car" => Ok(ParseResult {
+            exp: Exp::Car,
+            tokens,
+        }),
+        "cdr" => Ok(ParseResult {
+            exp: Exp::Cdr,
+            tokens,
+        }),
         x => {
             // TODO: Add context error message.
             let num: i64 = x.parse().context("number parse error")?;
@@ -133,6 +148,7 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
 }
 
 fn eval(exp: Exp) -> Result<EvalResult> {
+    // println!("eval: {:?}", exp);
     match exp {
         Exp::Num(n) => Ok(EvalResult::Num(n)),
         Exp::Ap(left, right) => {
@@ -156,10 +172,14 @@ fn eval(exp: Exp) -> Result<EvalResult> {
         Exp::T => Ok(EvalResult::LeafFunc(Exp::T)),
         Exp::F => Ok(EvalResult::LeafFunc(Exp::F)),
         Exp::I => Ok(EvalResult::LeafFunc(Exp::I)),
+        Exp::Cons => Ok(EvalResult::LeafFunc(Exp::Cons)),
+        Exp::Car => Ok(EvalResult::LeafFunc(Exp::Car)),
+        Exp::Cdr => Ok(EvalResult::LeafFunc(Exp::Cdr)),
     }
 }
 
 fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
+    // println!("apply: f: {:?}, x0: {:?}", f, x0);
     match f {
         EvalResult::LeafFunc(exp) => match (exp, x0) {
             (Exp::Neg, EvalResult::Num(n)) => Ok(EvalResult::Num(-n)),
@@ -169,6 +189,9 @@ fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
             (Exp::Dec, EvalResult::Num(n)) => Ok(EvalResult::Num(n - 1)),
             (Exp::Dec, _) => bail!("can not apply"),
             (Exp::I, x0) => Ok(x0),
+            // ap car x2 = ap x2 t
+            (Exp::Car, x0) => apply(x0, EvalResult::LeafFunc(Exp::T)),
+            (Exp::Cdr, x0) => apply(x0, EvalResult::LeafFunc(Exp::F)),
             (exp, x0) => Ok(EvalResult::PartialAp1(exp, Box::new(x0))),
         },
         EvalResult::PartialAp1(exp, op0) => match (exp, *op0, x0) {
@@ -194,6 +217,11 @@ fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
             (Exp::B, x0, x1) => Ok(EvalResult::PartialAp2(Exp::B, Box::new(x0), Box::new(x1))),
             (Exp::T, x0, _) => Ok(x0),
             (Exp::F, _, x1) => Ok(x1),
+            (Exp::Cons, x0, x1) => Ok(EvalResult::PartialAp2(
+                Exp::Cons,
+                Box::new(x0),
+                Box::new(x1),
+            )),
             (exp, x0, x1) => bail!("can not apply: exp: {:?}, x0: {:?}, x1: {:?}", exp, x0, x1),
         },
         EvalResult::PartialAp2(exp, op0, op1) => match (exp, *op0, *op1, x0) {
@@ -216,10 +244,15 @@ fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
                 // ap ap ap b inc dec x0   =   x0
                 apply(x0, apply(x1, x2)?)
             }
+            (Exp::Cons, x0, x1, x2) => {
+                // cons
+                // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
+                apply(apply(x2, x0)?, x1)
+            }
             _ => bail!("can not apply"),
         },
-        _ => {
-            bail!("can not apply");
+        x => {
+            bail!("can not apply: {:?}", x);
         }
     }
 }
@@ -295,6 +328,11 @@ mod tests {
         assert_eq!(eval_src("ap ap lt 0 0")?, EvalResult::False);
         assert_eq!(eval_src("ap ap lt 0 1")?, EvalResult::True);
 
+        Ok(())
+    }
+
+    #[test]
+    fn eval_unary_test() -> Result<()> {
         // neg
         assert_eq!(eval_src("ap neg 0")?, EvalResult::Num(0));
         assert_eq!(eval_src("ap neg 1")?, EvalResult::Num(-1));
@@ -309,6 +347,11 @@ mod tests {
         assert_eq!(eval_src("ap dec 0")?, EvalResult::Num(-1));
         assert_eq!(eval_src("ap dec 1")?, EvalResult::Num(0));
 
+        Ok(())
+    }
+
+    #[test]
+    fn eval_combinator_test() -> Result<()> {
         // s
         // assert_eq!(eval_src("ap ap ap s add inc 1", EvalResult::Num(3));  // inc is not implemented yet.
         assert_eq!(eval_src("ap ap ap s mul ap add 1 6")?, EvalResult::Num(42));
@@ -341,6 +384,18 @@ mod tests {
         // i
         assert_eq!(eval_src("ap i 0")?, EvalResult::Num(0));
         assert_eq!(eval_src("ap i i")?, EvalResult::LeafFunc(Exp::I));
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_cons_test() -> Result<()> {
+        // car, cdr, cons
+        // car
+        // ap car ap ap cons x0 x1   =   x0
+        // ap car x2   =   ap x2 t
+        assert_eq!(eval_src("ap car ap ap cons 0 1")?, EvalResult::Num(0));
+        assert_eq!(eval_src("ap cdr ap ap cons 0 1")?, EvalResult::Num(1));
 
         Ok(())
     }
