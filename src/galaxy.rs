@@ -49,11 +49,11 @@ pub enum Exp {
 }
 
 #[derive(PartialEq, Clone, Debug)]
-pub enum EvalResult {
+pub enum Value {
     Num(i64),
     Func(Exp),
-    PartialAp1(Exp, Box<EvalResult>),
-    PartialAp2(Exp, Box<EvalResult>, Box<EvalResult>),
+    PartialAp1(Exp, Box<Value>),
+    PartialAp2(Exp, Box<Value>, Box<Value>),
 }
 
 fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
@@ -61,6 +61,7 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
     let (current_token, tokens) = (tokens[0], &tokens[1..]);
     match current_token {
         "ap" => {
+            // TODO: parse overflows in debug build.
             let ParseResult { exp: exp1, tokens } = parse(tokens)?;
             let ParseResult { exp: exp2, tokens } = parse(tokens)?;
             Ok(ParseResult {
@@ -166,7 +167,7 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
 struct Galaxy {
     galaxy_id: u64,
     variables: HashMap<u64, Exp>,
-    results: HashMap<u64, EvalResult>,
+    results: HashMap<u64, Value>,
 }
 
 impl Galaxy {
@@ -183,7 +184,7 @@ impl Galaxy {
         })
     }
 
-    fn eval_galaxy(&mut self) -> Result<EvalResult> {
+    fn eval_galaxy(&mut self) -> Result<Value> {
         self.eval(self.variables[&self.galaxy_id].clone())
     }
 
@@ -205,6 +206,7 @@ impl Galaxy {
                 let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
 
                 for line in lines.iter().take(lines.len() - 1) {
+                    println!("process: line: {}", line);
                     let cap = re.captures(line).unwrap();
                     map.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?);
                     // println!("{}, {}", &cap[1], &cap[2]);
@@ -215,10 +217,10 @@ impl Galaxy {
         })
     }
 
-    fn eval(&mut self, exp: Exp) -> Result<EvalResult> {
+    fn eval(&mut self, exp: Exp) -> Result<Value> {
         // println!("eval: {:?}", exp);
         match exp {
-            Exp::Num(n) => Ok(EvalResult::Num(n)),
+            Exp::Num(n) => Ok(Value::Num(n)),
             Exp::Ap(left, right) => {
                 // TODO: Don't eval right hand if we don't use it.
                 // e.g. app app t 1 long-expression  => we don't need to eval long-expression
@@ -226,30 +228,30 @@ impl Galaxy {
                 let right = self.eval(*right)?;
                 self.apply(left, right)
             }
-            Exp::Add => Ok(EvalResult::Func(Exp::Add)),
-            Exp::Mul => Ok(EvalResult::Func(Exp::Mul)),
-            Exp::Div => Ok(EvalResult::Func(Exp::Div)),
-            Exp::Eq => Ok(EvalResult::Func(Exp::Eq)),
-            Exp::Lt => Ok(EvalResult::Func(Exp::Lt)),
-            Exp::Neg => Ok(EvalResult::Func(Exp::Neg)),
-            Exp::Inc => Ok(EvalResult::Func(Exp::Inc)),
-            Exp::Dec => Ok(EvalResult::Func(Exp::Dec)),
-            Exp::S => Ok(EvalResult::Func(Exp::S)),
-            Exp::C => Ok(EvalResult::Func(Exp::C)),
-            Exp::B => Ok(EvalResult::Func(Exp::B)),
-            Exp::T => Ok(EvalResult::Func(Exp::T)),
-            Exp::F => Ok(EvalResult::Func(Exp::F)),
-            Exp::I => Ok(EvalResult::Func(Exp::I)),
-            Exp::Cons => Ok(EvalResult::Func(Exp::Cons)),
-            Exp::Car => Ok(EvalResult::Func(Exp::Car)),
-            Exp::Cdr => Ok(EvalResult::Func(Exp::Cdr)),
-            Exp::Nil => Ok(EvalResult::Func(Exp::Nil)),
-            Exp::Isnil => Ok(EvalResult::Func(Exp::Isnil)),
+            Exp::Add => Ok(Value::Func(Exp::Add)),
+            Exp::Mul => Ok(Value::Func(Exp::Mul)),
+            Exp::Div => Ok(Value::Func(Exp::Div)),
+            Exp::Eq => Ok(Value::Func(Exp::Eq)),
+            Exp::Lt => Ok(Value::Func(Exp::Lt)),
+            Exp::Neg => Ok(Value::Func(Exp::Neg)),
+            Exp::Inc => Ok(Value::Func(Exp::Inc)),
+            Exp::Dec => Ok(Value::Func(Exp::Dec)),
+            Exp::S => Ok(Value::Func(Exp::S)),
+            Exp::C => Ok(Value::Func(Exp::C)),
+            Exp::B => Ok(Value::Func(Exp::B)),
+            Exp::T => Ok(Value::Func(Exp::T)),
+            Exp::F => Ok(Value::Func(Exp::F)),
+            Exp::I => Ok(Value::Func(Exp::I)),
+            Exp::Cons => Ok(Value::Func(Exp::Cons)),
+            Exp::Car => Ok(Value::Func(Exp::Car)),
+            Exp::Cdr => Ok(Value::Func(Exp::Cdr)),
+            Exp::Nil => Ok(Value::Func(Exp::Nil)),
+            Exp::Isnil => Ok(Value::Func(Exp::Isnil)),
             Exp::Var(n) => self.eval_var(n),
         }
     }
 
-    fn eval_var(&mut self, variable_id: u64) -> Result<EvalResult> {
+    fn eval_var(&mut self, variable_id: u64) -> Result<Value> {
         if let Some(result) = self.results.get(&variable_id) {
             Ok(result.clone())
         } else {
@@ -259,62 +261,52 @@ impl Galaxy {
         }
     }
 
-    fn apply(&mut self, f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
+    fn apply(&mut self, f: Value, x0: Value) -> Result<Value> {
         // println!("apply: f: {:?}, x0: {:?}", f, x0);
         match f {
-            EvalResult::Func(exp) => match (exp, x0) {
-                (Exp::Neg, EvalResult::Num(n)) => Ok(EvalResult::Num(-n)),
+            Value::Func(exp) => match (exp, x0) {
+                (Exp::Neg, Value::Num(n)) => Ok(Value::Num(-n)),
                 (Exp::Neg, _) => bail!("can not apply"),
-                (Exp::Inc, EvalResult::Num(n)) => Ok(EvalResult::Num(n + 1)),
+                (Exp::Inc, Value::Num(n)) => Ok(Value::Num(n + 1)),
                 (Exp::Inc, _) => bail!("can not apply"),
-                (Exp::Dec, EvalResult::Num(n)) => Ok(EvalResult::Num(n - 1)),
+                (Exp::Dec, Value::Num(n)) => Ok(Value::Num(n - 1)),
                 (Exp::Dec, _) => bail!("can not apply"),
                 (Exp::I, x0) => Ok(x0),
                 // ap car x2 = ap x2 t
-                (Exp::Car, x0) => self.apply(x0, EvalResult::Func(Exp::T)),
-                (Exp::Cdr, x0) => self.apply(x0, EvalResult::Func(Exp::F)),
-                (Exp::Nil, _) => Ok(EvalResult::Func(Exp::T)),
-                (Exp::Isnil, EvalResult::Func(Exp::Nil)) => Ok(EvalResult::Func(Exp::T)),
-                (Exp::Isnil, _) => Ok(EvalResult::Func(Exp::F)),
-                (exp, x0) => Ok(EvalResult::PartialAp1(exp, Box::new(x0))),
+                (Exp::Car, x0) => self.apply(x0, Value::Func(Exp::T)),
+                (Exp::Cdr, x0) => self.apply(x0, Value::Func(Exp::F)),
+                (Exp::Nil, _) => Ok(Value::Func(Exp::T)),
+                (Exp::Isnil, Value::Func(Exp::Nil)) => Ok(Value::Func(Exp::T)),
+                (Exp::Isnil, _) => Ok(Value::Func(Exp::F)),
+                (exp, x0) => Ok(Value::PartialAp1(exp, Box::new(x0))),
             },
-            EvalResult::PartialAp1(exp, op0) => match (exp, *op0, x0) {
-                (Exp::Add, EvalResult::Num(n1), EvalResult::Num(n2)) => {
-                    Ok(EvalResult::Num(n1 + n2))
-                }
-                (Exp::Mul, EvalResult::Num(n1), EvalResult::Num(n2)) => {
-                    Ok(EvalResult::Num(n1 * n2))
-                }
-                (Exp::Div, EvalResult::Num(n1), EvalResult::Num(n2)) => {
-                    Ok(EvalResult::Num(n1 / n2))
-                }
-                (Exp::Eq, EvalResult::Num(n1), EvalResult::Num(n2)) => {
+            Value::PartialAp1(exp, op0) => match (exp, *op0, x0) {
+                (Exp::Add, Value::Num(n1), Value::Num(n2)) => Ok(Value::Num(n1 + n2)),
+                (Exp::Mul, Value::Num(n1), Value::Num(n2)) => Ok(Value::Num(n1 * n2)),
+                (Exp::Div, Value::Num(n1), Value::Num(n2)) => Ok(Value::Num(n1 / n2)),
+                (Exp::Eq, Value::Num(n1), Value::Num(n2)) => {
                     if n1 == n2 {
-                        Ok(EvalResult::Func(Exp::T))
+                        Ok(Value::Func(Exp::T))
                     } else {
-                        Ok(EvalResult::Func(Exp::F))
+                        Ok(Value::Func(Exp::F))
                     }
                 }
-                (Exp::Lt, EvalResult::Num(n1), EvalResult::Num(n2)) => {
+                (Exp::Lt, Value::Num(n1), Value::Num(n2)) => {
                     if n1 < n2 {
-                        Ok(EvalResult::Func(Exp::T))
+                        Ok(Value::Func(Exp::T))
                     } else {
-                        Ok(EvalResult::Func(Exp::F))
+                        Ok(Value::Func(Exp::F))
                     }
                 }
-                (Exp::S, x0, x1) => Ok(EvalResult::PartialAp2(Exp::S, Box::new(x0), Box::new(x1))),
-                (Exp::C, x0, x1) => Ok(EvalResult::PartialAp2(Exp::C, Box::new(x0), Box::new(x1))),
-                (Exp::B, x0, x1) => Ok(EvalResult::PartialAp2(Exp::B, Box::new(x0), Box::new(x1))),
+                (Exp::S, x0, x1) => Ok(Value::PartialAp2(Exp::S, Box::new(x0), Box::new(x1))),
+                (Exp::C, x0, x1) => Ok(Value::PartialAp2(Exp::C, Box::new(x0), Box::new(x1))),
+                (Exp::B, x0, x1) => Ok(Value::PartialAp2(Exp::B, Box::new(x0), Box::new(x1))),
                 (Exp::T, x0, _) => Ok(x0),
                 (Exp::F, _, x1) => Ok(x1),
-                (Exp::Cons, x0, x1) => Ok(EvalResult::PartialAp2(
-                    Exp::Cons,
-                    Box::new(x0),
-                    Box::new(x1),
-                )),
+                (Exp::Cons, x0, x1) => Ok(Value::PartialAp2(Exp::Cons, Box::new(x0), Box::new(x1))),
                 (exp, x0, x1) => bail!("can not apply: exp: {:?}, x0: {:?}, x1: {:?}", exp, x0, x1),
             },
-            EvalResult::PartialAp2(exp, op0, op1) => match (exp, *op0, *op1, x0) {
+            Value::PartialAp2(exp, op0, op1) => match (exp, *op0, *op1, x0) {
                 (Exp::S, x0, x1, x2) => {
                     // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                     // ap ap ap s add inc 1   =   3
@@ -351,10 +343,15 @@ impl Galaxy {
     }
 }
 
-pub fn eval_src(src: &str) -> Result<EvalResult> {
+pub fn eval_src(src: &str) -> Result<Value> {
     // let exp = parse_src(src)?;
     // eval(exp)
     let mut galaxy = Galaxy::new_for_test(src)?;
+    galaxy.eval_galaxy()
+}
+
+pub fn eval_galaxy_src(src: &str) -> Result<Value> {
+    let mut galaxy = Galaxy::new(src)?;
     galaxy.eval_galaxy()
 }
 
@@ -409,31 +406,31 @@ mod tests {
 
     #[test]
     fn eval_test() -> Result<()> {
-        let t = EvalResult::Func(Exp::T);
-        let f = EvalResult::Func(Exp::F);
+        let t = Value::Func(Exp::T);
+        let f = Value::Func(Exp::F);
 
         // add
-        assert_eq!(eval_src("ap ap add 1 2")?, EvalResult::Num(3));
-        assert_eq!(eval_src("ap ap add 3 ap ap add 1 2")?, EvalResult::Num(6));
+        assert_eq!(eval_src("ap ap add 1 2")?, Value::Num(3));
+        assert_eq!(eval_src("ap ap add 3 ap ap add 1 2")?, Value::Num(6));
 
         // eq
         assert_eq!(eval_src("ap ap eq 1 1")?, t);
         assert_eq!(eval_src("ap ap eq 1 2")?, f);
 
         // mul
-        assert_eq!(eval_src("ap ap mul 2 4")?, EvalResult::Num(8));
-        assert_eq!(eval_src("ap ap add 3 ap ap mul 2 4")?, EvalResult::Num(11));
+        assert_eq!(eval_src("ap ap mul 2 4")?, Value::Num(8));
+        assert_eq!(eval_src("ap ap add 3 ap ap mul 2 4")?, Value::Num(11));
 
         // div
-        assert_eq!(eval_src("ap ap div 4 2")?, EvalResult::Num(2));
-        assert_eq!(eval_src("ap ap div 4 3")?, EvalResult::Num(1));
-        assert_eq!(eval_src("ap ap div 4 4")?, EvalResult::Num(1));
-        assert_eq!(eval_src("ap ap div 4 5")?, EvalResult::Num(0));
-        assert_eq!(eval_src("ap ap div 5 2")?, EvalResult::Num(2));
-        assert_eq!(eval_src("ap ap div 6 -2")?, EvalResult::Num(-3));
-        assert_eq!(eval_src("ap ap div 5 -3")?, EvalResult::Num(-1));
-        assert_eq!(eval_src("ap ap div -5 3")?, EvalResult::Num(-1));
-        assert_eq!(eval_src("ap ap div -5 -3")?, EvalResult::Num(1));
+        assert_eq!(eval_src("ap ap div 4 2")?, Value::Num(2));
+        assert_eq!(eval_src("ap ap div 4 3")?, Value::Num(1));
+        assert_eq!(eval_src("ap ap div 4 4")?, Value::Num(1));
+        assert_eq!(eval_src("ap ap div 4 5")?, Value::Num(0));
+        assert_eq!(eval_src("ap ap div 5 2")?, Value::Num(2));
+        assert_eq!(eval_src("ap ap div 6 -2")?, Value::Num(-3));
+        assert_eq!(eval_src("ap ap div 5 -3")?, Value::Num(-1));
+        assert_eq!(eval_src("ap ap div -5 3")?, Value::Num(-1));
+        assert_eq!(eval_src("ap ap div -5 -3")?, Value::Num(1));
 
         // lt
         assert_eq!(eval_src("ap ap lt 0 -1")?, f);
@@ -446,18 +443,18 @@ mod tests {
     #[test]
     fn eval_unary_test() -> Result<()> {
         // neg
-        assert_eq!(eval_src("ap neg 0")?, EvalResult::Num(0));
-        assert_eq!(eval_src("ap neg 1")?, EvalResult::Num(-1));
-        assert_eq!(eval_src("ap neg -1")?, EvalResult::Num(1));
-        assert_eq!(eval_src("ap ap add ap neg 1 2")?, EvalResult::Num(1));
+        assert_eq!(eval_src("ap neg 0")?, Value::Num(0));
+        assert_eq!(eval_src("ap neg 1")?, Value::Num(-1));
+        assert_eq!(eval_src("ap neg -1")?, Value::Num(1));
+        assert_eq!(eval_src("ap ap add ap neg 1 2")?, Value::Num(1));
 
         // inc
-        assert_eq!(eval_src("ap inc 0")?, EvalResult::Num(1));
-        assert_eq!(eval_src("ap inc 1")?, EvalResult::Num(2));
+        assert_eq!(eval_src("ap inc 0")?, Value::Num(1));
+        assert_eq!(eval_src("ap inc 1")?, Value::Num(2));
 
         // dec
-        assert_eq!(eval_src("ap dec 0")?, EvalResult::Num(-1));
-        assert_eq!(eval_src("ap dec 1")?, EvalResult::Num(0));
+        assert_eq!(eval_src("ap dec 0")?, Value::Num(-1));
+        assert_eq!(eval_src("ap dec 1")?, Value::Num(0));
 
         Ok(())
     }
@@ -466,15 +463,15 @@ mod tests {
     fn eval_combinator_test() -> Result<()> {
         // s
         // assert_eq!(eval_src("ap ap ap s add inc 1", EvalResult::Num(3));  // inc is not implemented yet.
-        assert_eq!(eval_src("ap ap ap s mul ap add 1 6")?, EvalResult::Num(42));
+        assert_eq!(eval_src("ap ap ap s mul ap add 1 6")?, Value::Num(42));
 
         // c
-        assert_eq!(eval_src("ap ap ap c add 1 2")?, EvalResult::Num(3));
+        assert_eq!(eval_src("ap ap ap c add 1 2")?, Value::Num(3));
 
         // b
         // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
         // ap ap ap b inc dec x0   =   x0
-        assert_eq!(eval_src("ap ap ap b neg neg 1")?, EvalResult::Num(1));
+        assert_eq!(eval_src("ap ap ap b neg neg 1")?, Value::Num(1));
 
         // t
         // ap ap t x0 x1   =   x0
@@ -482,17 +479,17 @@ mod tests {
         // ap ap t t i   =   t
         // ap ap t t ap inc 5   =   t
         // ap ap t ap inc 5 t   =   6
-        assert_eq!(eval_src("ap ap t 1 5")?, EvalResult::Num(1));
-        assert_eq!(eval_src("ap ap t t 1")?, EvalResult::Func(Exp::T));
-        assert_eq!(eval_src("ap ap t t ap inc 5")?, EvalResult::Func(Exp::T));
-        assert_eq!(eval_src("ap ap t ap inc 5 t")?, EvalResult::Num(6));
+        assert_eq!(eval_src("ap ap t 1 5")?, Value::Num(1));
+        assert_eq!(eval_src("ap ap t t 1")?, Value::Func(Exp::T));
+        assert_eq!(eval_src("ap ap t t ap inc 5")?, Value::Func(Exp::T));
+        assert_eq!(eval_src("ap ap t ap inc 5 t")?, Value::Num(6));
 
         // f
-        assert_eq!(eval_src("ap ap f 1 2")?, EvalResult::Num(2));
+        assert_eq!(eval_src("ap ap f 1 2")?, Value::Num(2));
 
         // i
-        assert_eq!(eval_src("ap i 0")?, EvalResult::Num(0));
-        assert_eq!(eval_src("ap i i")?, EvalResult::Func(Exp::I));
+        assert_eq!(eval_src("ap i 0")?, Value::Num(0));
+        assert_eq!(eval_src("ap i i")?, Value::Func(Exp::I));
 
         Ok(())
     }
@@ -503,27 +500,51 @@ mod tests {
         // car
         // ap car ap ap cons x0 x1   =   x0
         // ap car x2   =   ap x2 t
-        assert_eq!(eval_src("ap car ap ap cons 0 1")?, EvalResult::Num(0));
-        assert_eq!(eval_src("ap cdr ap ap cons 0 1")?, EvalResult::Num(1));
+        assert_eq!(eval_src("ap car ap ap cons 0 1")?, Value::Num(0));
+        assert_eq!(eval_src("ap cdr ap ap cons 0 1")?, Value::Num(1));
 
         // nil
         // ap nil x0   =   t
-        assert_eq!(eval_src("ap nil 1")?, EvalResult::Func(Exp::T));
+        assert_eq!(eval_src("ap nil 1")?, Value::Func(Exp::T));
 
         // isnil
-        assert_eq!(eval_src("ap isnil nil")?, EvalResult::Func(Exp::T));
-        assert_eq!(eval_src("ap isnil 1")?, EvalResult::Func(Exp::F));
+        assert_eq!(eval_src("ap isnil nil")?, Value::Func(Exp::T));
+        assert_eq!(eval_src("ap isnil 1")?, Value::Func(Exp::F));
 
         Ok(())
     }
 
-    #[ignore]
     #[test]
-    fn eval_galaxy_test() -> Result<()> {
-        assert_eq!(
-            eval_src("ap ap cons 7 ap ap cons 123229502148636 nil")?,
-            EvalResult::Func(Exp::T)
-        );
+    fn eval_galaxy_src_test() -> Result<()> {
+        let src = ":1 = 2
+galaxy = :1
+";
+        assert_eq!(eval_galaxy_src(src)?, Value::Num(2));
+
+        let src = ":1 = 2
+:2 = :1
+galaxy = :2
+";
+        assert_eq!(eval_galaxy_src(src)?, Value::Num(2));
+
+        let src = ":1 = 2
+:2 = ap inc :1
+galaxy = :2
+";
+        assert_eq!(eval_galaxy_src(src)?, Value::Num(3));
+
+        let src = ":1 = 2
+:2 = ap ap add 1 :1
+galaxy = :2
+";
+        assert_eq!(eval_galaxy_src(src)?, Value::Num(3));
+
+        let src = ":1 = ap add 1
+:2 = ap :1 2
+galaxy = :2
+";
+        assert_eq!(eval_galaxy_src(src)?, Value::Num(3));
+
         Ok(())
     }
 
@@ -532,9 +553,7 @@ mod tests {
     fn run_galaxy_test() -> Result<()> {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("task/galaxy.txt");
-        // path.push("task/a.txt");
         let src = std::fs::read_to_string(path)?.trim().to_string();
-
         run_galaxy(&src)
     }
 }
