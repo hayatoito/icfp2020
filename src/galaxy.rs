@@ -7,7 +7,7 @@ fn tokenize(src: &str) -> Vec<&str> {
     src.split_whitespace().collect()
 }
 
-fn parse_src(src: &str) -> Result<Exp> {
+fn parse_src(src: &str) -> Result<Expr> {
     let tokens = tokenize(src);
     let parse_result = parse(&tokens)?;
     ensure!(
@@ -18,14 +18,14 @@ fn parse_src(src: &str) -> Result<Exp> {
 }
 
 struct ParseResult<'a> {
-    exp: Exp,
+    exp: Expr,
     tokens: &'a [&'a str],
 }
 
 #[derive(PartialEq, Clone, Debug)]
-pub enum Exp {
+pub enum Expr {
     Num(i64),
-    Ap(Box<Exp>, Box<Exp>),
+    Ap(Box<Expr>, Box<Expr>),
     Add,
     Mul,
     Div,
@@ -51,122 +51,63 @@ pub enum Exp {
 #[derive(PartialEq, Clone, Debug)]
 pub enum Value {
     Num(i64),
-    Func(Exp),
-    PartialAp1(Exp, Exp),
-    PartialAp2(Exp, Exp, Exp),
+    Func(Expr),
+    PartialAp1(Expr, Expr),
+    PartialAp2(Expr, Expr, Expr),
 }
 
 fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
     assert!(!tokens.is_empty());
     let (current_token, tokens) = (tokens[0], &tokens[1..]);
-    match current_token {
-        "ap" => {
-            // TODO: parse overflows in debug build.
-            let ParseResult { exp: exp1, tokens } = parse(tokens)?;
-            let ParseResult { exp: exp2, tokens } = parse(tokens)?;
-            Ok(ParseResult {
-                exp: Exp::Ap(Box::new(exp1), Box::new(exp2)),
-                tokens,
-            })
-        }
-        "add" => Ok(ParseResult {
-            exp: Exp::Add,
+    if current_token == "ap" {
+        // TODO: parse overflows in debug build.
+        let ParseResult { exp: exp1, tokens } = parse(tokens)?;
+        let ParseResult { exp: exp2, tokens } = parse(tokens)?;
+        Ok(ParseResult {
+            exp: Expr::Ap(Box::new(exp1), Box::new(exp2)),
             tokens,
-        }),
-        "eq" => Ok(ParseResult {
-            exp: Exp::Eq,
+        })
+    } else {
+        Ok(ParseResult {
+            exp: match current_token {
+                "add" => Expr::Add,
+                "eq" => Expr::Eq,
+                "mul" => Expr::Mul,
+                "div" => Expr::Div,
+                "lt" => Expr::Lt,
+                "neg" => Expr::Neg,
+                "inc" => Expr::Inc,
+                "dec" => Expr::Dec,
+                "s" => Expr::S,
+                "c" => Expr::C,
+                "b" => Expr::B,
+                "t" => Expr::T,
+                "f" => Expr::F,
+                "i" => Expr::I,
+                "cons" => Expr::Cons,
+                "car" => Expr::Car,
+                "cdr" => Expr::Cdr,
+                "nil" => Expr::Nil,
+                "isnil" => Expr::Isnil,
+                x => {
+                    if x.as_bytes()[0] == b':' {
+                        let var_id: u64 = x[1..].parse()?;
+                        Expr::Var(var_id)
+                    } else {
+                        // TODO: Add context error message.
+                        let num: i64 = x.parse().context("number parse error")?;
+                        Expr::Num(num)
+                    }
+                }
+            },
             tokens,
-        }),
-        "mul" => Ok(ParseResult {
-            exp: Exp::Mul,
-            tokens,
-        }),
-        "div" => Ok(ParseResult {
-            exp: Exp::Div,
-            tokens,
-        }),
-        "lt" => Ok(ParseResult {
-            exp: Exp::Lt,
-            tokens,
-        }),
-        "neg" => Ok(ParseResult {
-            exp: Exp::Neg,
-            tokens,
-        }),
-        "inc" => Ok(ParseResult {
-            exp: Exp::Inc,
-            tokens,
-        }),
-        "dec" => Ok(ParseResult {
-            exp: Exp::Dec,
-            tokens,
-        }),
-        "s" => Ok(ParseResult {
-            exp: Exp::S,
-            tokens,
-        }),
-        "c" => Ok(ParseResult {
-            exp: Exp::C,
-            tokens,
-        }),
-        "b" => Ok(ParseResult {
-            exp: Exp::B,
-            tokens,
-        }),
-        "t" => Ok(ParseResult {
-            exp: Exp::T,
-            tokens,
-        }),
-        "f" => Ok(ParseResult {
-            exp: Exp::F,
-            tokens,
-        }),
-        "i" => Ok(ParseResult {
-            exp: Exp::I,
-            tokens,
-        }),
-        "cons" => Ok(ParseResult {
-            exp: Exp::Cons,
-            tokens,
-        }),
-        "car" => Ok(ParseResult {
-            exp: Exp::Car,
-            tokens,
-        }),
-        "cdr" => Ok(ParseResult {
-            exp: Exp::Cdr,
-            tokens,
-        }),
-        "nil" => Ok(ParseResult {
-            exp: Exp::Nil,
-            tokens,
-        }),
-        "isnil" => Ok(ParseResult {
-            exp: Exp::Isnil,
-            tokens,
-        }),
-        x => {
-            if x.as_bytes()[0] == b':' {
-                let var_id: u64 = x[1..].parse()?;
-                Ok(ParseResult {
-                    exp: Exp::Var(var_id),
-                    tokens,
-                })
-            } else {
-                // TODO: Add context error message.
-                let num: i64 = x.parse().context("number parse error")?;
-                Ok(ParseResult {
-                    exp: Exp::Num(num),
-                    tokens,
-                })
-            }
-        }
+        })
     }
 }
 
 struct Galaxy {
     galaxy_id: u64,
-    variables: HashMap<u64, Exp>,
+    functions: HashMap<u64, Expr>,
     results: HashMap<u64, Value>,
 }
 
@@ -175,7 +116,7 @@ impl Galaxy {
         let exp = parse_src(src)?;
         Ok(Galaxy {
             galaxy_id: 1,
-            variables: {
+            functions: {
                 let mut map = HashMap::new();
                 map.insert(1, exp);
                 map
@@ -185,25 +126,25 @@ impl Galaxy {
     }
 
     fn eval_galaxy(&mut self) -> Result<Value> {
-        self.eval(self.variables[&self.galaxy_id].clone())
+        self.eval(self.functions[&self.galaxy_id].clone())
     }
 
     fn new(src: &str) -> Result<Galaxy> {
         let lines = src.trim().split('\n').collect::<Vec<_>>();
-        println!("last line: {}", lines[lines.len() - 1]);
+        // println!("last line: {}", lines[lines.len() - 1]);
         let galaxy_line_re = Regex::new(r"galaxy *= :*(\d+)$").unwrap();
         let cap = galaxy_line_re.captures(lines[lines.len() - 1]).unwrap();
         let galaxy_id: u64 = cap[1].parse()?;
-        println!("galaxy_id: {}", galaxy_id);
+        // println!("galaxy_id: {}", galaxy_id);
 
         Ok(Galaxy {
             galaxy_id,
-            variables: {
+            functions: {
                 let mut map = HashMap::new();
                 let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
 
                 for line in lines.iter().take(lines.len() - 1) {
-                    println!("parse: line: {}", line);
+                    // println!("parse: line: {}", line);
                     let cap = re.captures(line).unwrap();
                     map.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?);
                     // println!("{}, {}", &cap[1], &cap[2]);
@@ -214,31 +155,31 @@ impl Galaxy {
         })
     }
 
-    fn eval(&mut self, exp: Exp) -> Result<Value> {
-        println!("eval: {:?}", exp);
+    fn eval(&mut self, exp: Expr) -> Result<Value> {
+        // println!("eval: {:?}", exp);
         match exp {
-            Exp::Num(n) => Ok(Value::Num(n)),
-            Exp::Ap(left, right) => self.apply(*left, *right),
-            Exp::Add => Ok(Value::Func(Exp::Add)),
-            Exp::Mul => Ok(Value::Func(Exp::Mul)),
-            Exp::Div => Ok(Value::Func(Exp::Div)),
-            Exp::Eq => Ok(Value::Func(Exp::Eq)),
-            Exp::Lt => Ok(Value::Func(Exp::Lt)),
-            Exp::Neg => Ok(Value::Func(Exp::Neg)),
-            Exp::Inc => Ok(Value::Func(Exp::Inc)),
-            Exp::Dec => Ok(Value::Func(Exp::Dec)),
-            Exp::S => Ok(Value::Func(Exp::S)),
-            Exp::C => Ok(Value::Func(Exp::C)),
-            Exp::B => Ok(Value::Func(Exp::B)),
-            Exp::T => Ok(Value::Func(Exp::T)),
-            Exp::F => Ok(Value::Func(Exp::F)),
-            Exp::I => Ok(Value::Func(Exp::I)),
-            Exp::Cons => Ok(Value::Func(Exp::Cons)),
-            Exp::Car => Ok(Value::Func(Exp::Car)),
-            Exp::Cdr => Ok(Value::Func(Exp::Cdr)),
-            Exp::Nil => Ok(Value::Func(Exp::Nil)),
-            Exp::Isnil => Ok(Value::Func(Exp::Isnil)),
-            Exp::Var(n) => self.eval_var(n),
+            Expr::Num(n) => Ok(Value::Num(n)),
+            Expr::Ap(left, right) => self.apply(*left, *right),
+            Expr::Add => Ok(Value::Func(Expr::Add)),
+            Expr::Mul => Ok(Value::Func(Expr::Mul)),
+            Expr::Div => Ok(Value::Func(Expr::Div)),
+            Expr::Eq => Ok(Value::Func(Expr::Eq)),
+            Expr::Lt => Ok(Value::Func(Expr::Lt)),
+            Expr::Neg => Ok(Value::Func(Expr::Neg)),
+            Expr::Inc => Ok(Value::Func(Expr::Inc)),
+            Expr::Dec => Ok(Value::Func(Expr::Dec)),
+            Expr::S => Ok(Value::Func(Expr::S)),
+            Expr::C => Ok(Value::Func(Expr::C)),
+            Expr::B => Ok(Value::Func(Expr::B)),
+            Expr::T => Ok(Value::Func(Expr::T)),
+            Expr::F => Ok(Value::Func(Expr::F)),
+            Expr::I => Ok(Value::Func(Expr::I)),
+            Expr::Cons => Ok(Value::Func(Expr::Cons)),
+            Expr::Car => Ok(Value::Func(Expr::Car)),
+            Expr::Cdr => Ok(Value::Func(Expr::Cdr)),
+            Expr::Nil => Ok(Value::Func(Expr::Nil)),
+            Expr::Isnil => Ok(Value::Func(Expr::Isnil)),
+            Expr::Var(n) => self.eval_var(n),
         }
     }
 
@@ -246,113 +187,111 @@ impl Galaxy {
         if let Some(result) = self.results.get(&variable_id) {
             Ok(result.clone())
         } else {
-            let result = self.eval(self.variables[&variable_id].clone())?;
+            let result = self.eval(self.functions[&variable_id].clone())?;
             self.results.insert(variable_id, result.clone());
             Ok(result)
         }
     }
 
-    // fn apply(&mut self, f: Value, x0: Value) -> Result<Value> {
-
-    fn apply(&mut self, f: Exp, x0: Exp) -> Result<Value> {
-        // println!("apply: f: {:?}, x0: {:?}", f, x0);
+    fn apply(&mut self, f: Expr, x0: Expr) -> Result<Value> {
+        debug!("apply: f: {:?}, x0: {:?}", f, x0);
         let f = self.eval(f)?;
         match f {
             Value::Func(exp) => match exp {
-                Exp::Neg => match self.eval(x0)? {
+                Expr::Neg => match self.eval(x0)? {
                     Value::Num(n) => Ok(Value::Num(-n)),
                     _ => bail!("can not apply"),
                 },
-                Exp::Inc => match self.eval(x0)? {
+                Expr::Inc => match self.eval(x0)? {
                     Value::Num(n) => Ok(Value::Num(n + 1)),
                     _ => bail!("can not apply"),
                 },
-                Exp::Dec => match self.eval(x0)? {
+                Expr::Dec => match self.eval(x0)? {
                     Value::Num(n) => Ok(Value::Num(n - 1)),
                     _ => bail!("can not apply"),
                 },
-                Exp::I => self.eval(x0),
+                Expr::I => self.eval(x0),
                 // ap car x2 = ap x2 t
-                Exp::Car => self.apply(x0, Exp::T),
-                Exp::Cdr => self.apply(x0, Exp::F),
-                Exp::Nil => Ok(Value::Func(Exp::T)),
-                Exp::Isnil => match self.eval(x0)? {
-                    Value::Func(Exp::Nil) => Ok(Value::Func(Exp::T)),
-                    _ => Ok(Value::Func(Exp::F)),
+                Expr::Car => self.apply(x0, Expr::T),
+                Expr::Cdr => self.apply(x0, Expr::F),
+                Expr::Nil => Ok(Value::Func(Expr::T)),
+                Expr::Isnil => match self.eval(x0)? {
+                    Value::Func(Expr::Nil) => Ok(Value::Func(Expr::T)),
+                    _ => Ok(Value::Func(Expr::F)),
                 },
                 exp => Ok(Value::PartialAp1(exp, x0)),
             },
             Value::PartialAp1(exp, e0) => {
                 let e1 = x0; // For readability.
                 match exp {
-                    Exp::Add => match (self.eval(e0)?, self.eval(e1)?) {
+                    Expr::Add => match (self.eval(e0)?, self.eval(e1)?) {
                         (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 + n1)),
                         _ => bail!("can not apply"),
                     },
-                    Exp::Mul => match (self.eval(e0)?, self.eval(e1)?) {
+                    Expr::Mul => match (self.eval(e0)?, self.eval(e1)?) {
                         (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 * n1)),
                         _ => bail!("can not apply"),
                     },
-                    Exp::Div => match (self.eval(e0)?, self.eval(e1)?) {
+                    Expr::Div => match (self.eval(e0)?, self.eval(e1)?) {
                         (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 / n1)),
                         _ => bail!("can not apply"),
                     },
-                    Exp::Eq => match (self.eval(e0)?, self.eval(e1)?) {
+                    Expr::Eq => match (self.eval(e0)?, self.eval(e1)?) {
                         (Value::Num(n0), Value::Num(n1)) => {
                             if n0 == n1 {
-                                Ok(Value::Func(Exp::T))
+                                Ok(Value::Func(Expr::T))
                             } else {
-                                Ok(Value::Func(Exp::F))
+                                Ok(Value::Func(Expr::F))
                             }
                         }
                         _ => bail!("can not apply"),
                     },
-                    Exp::Lt => match (self.eval(e0)?, self.eval(e1)?) {
+                    Expr::Lt => match (self.eval(e0)?, self.eval(e1)?) {
                         (Value::Num(n0), Value::Num(n1)) => {
                             if n0 < n1 {
-                                Ok(Value::Func(Exp::T))
+                                Ok(Value::Func(Expr::T))
                             } else {
-                                Ok(Value::Func(Exp::F))
+                                Ok(Value::Func(Expr::F))
                             }
                         }
                         _ => bail!("can not apply"),
                     },
-                    Exp::S => Ok(Value::PartialAp2(Exp::S, e0, e1)),
-                    Exp::C => Ok(Value::PartialAp2(Exp::C, e0, e1)),
-                    Exp::B => Ok(Value::PartialAp2(Exp::B, e0, e1)),
-                    Exp::T => self.eval(e0),
+                    Expr::S => Ok(Value::PartialAp2(Expr::S, e0, e1)),
+                    Expr::C => Ok(Value::PartialAp2(Expr::C, e0, e1)),
+                    Expr::B => Ok(Value::PartialAp2(Expr::B, e0, e1)),
+                    Expr::T => self.eval(e0),
                     // New
-                    Exp::F => self.eval(e1),
-                    Exp::Cons => Ok(Value::PartialAp2(Exp::Cons, e0, e1)),
+                    Expr::F => self.eval(e1),
+                    Expr::Cons => Ok(Value::PartialAp2(Expr::Cons, e0, e1)),
                     exp => bail!("can not apply: exp: {:?}, e0: {:?}, e1: {:?}", exp, e0, e1),
                 }
             }
             Value::PartialAp2(exp, e0, e1) => {
                 let e2 = x0;
                 match exp {
-                    Exp::S => {
+                    Expr::S => {
                         // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                         // ap ap ap s add inc 1   =   3
 
                         // TODO: Avoid clone. Use Rc?
-                        let ap_x0_x2 = Exp::Ap(Box::new(e0), Box::new(e2.clone()));
-                        let ap_x1_x2 = Exp::Ap(Box::new(e1), Box::new(e2));
+                        let ap_x0_x2 = Expr::Ap(Box::new(e0), Box::new(e2.clone()));
+                        let ap_x1_x2 = Expr::Ap(Box::new(e1), Box::new(e2));
                         self.apply(ap_x0_x2, ap_x1_x2)
                     }
-                    Exp::C => {
+                    Expr::C => {
                         // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
                         // ap ap ap c add 1 2   =   3
-                        self.apply(Exp::Ap(Box::new(e0), Box::new(e2)), e1)
+                        self.apply(Expr::Ap(Box::new(e0), Box::new(e2)), e1)
                     }
-                    Exp::B => {
+                    Expr::B => {
                         // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
                         // ap ap ap b inc dec x0   =   x0
-                        self.apply(e0, Exp::Ap(Box::new(e1), Box::new(e2)))
+                        self.apply(e0, Expr::Ap(Box::new(e1), Box::new(e2)))
                     }
-                    Exp::Cons => {
+                    Expr::Cons => {
                         // cons
                         // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
-                        self.apply(Exp::Ap(Box::new(e2), Box::new(e0)), e1)
+                        self.apply(Expr::Ap(Box::new(e2), Box::new(e0)), e1)
                     }
                     _ => bail!("can not apply"),
                 }
@@ -382,6 +321,27 @@ pub fn eval_galaxy_src(src: &str) -> Result<Value> {
 mod tests {
 
     use super::*;
+    use chrono::Local;
+    use std::io::Write as _;
+
+    fn init_env_logger() {
+        let _ = env_logger::builder()
+            .format(|buf, record| {
+                writeln!(
+                    buf,
+                    "[{} {:5} {}] ({}:{}) {}",
+                    Local::now().format("%+"),
+                    // record.level(),
+                    buf.default_styled_level(record.level()),
+                    record.target(),
+                    record.file().unwrap_or("unknown"),
+                    record.line().unwrap_or(0),
+                    record.args(),
+                )
+            })
+            .is_test(true)
+            .try_init();
+    }
 
     #[test]
     fn tokenize_test() {
@@ -394,20 +354,20 @@ mod tests {
 
     #[test]
     fn parse_test() -> Result<()> {
-        assert_eq!(parse_src("1")?, Exp::Num(1));
-        assert_eq!(parse_src("add")?, Exp::Add);
+        assert_eq!(parse_src("1")?, Expr::Num(1));
+        assert_eq!(parse_src("add")?, Expr::Add);
         assert_eq!(
             parse_src("ap ap add 1 2")?,
-            Exp::Ap(
-                Box::new(Exp::Ap(Box::new(Exp::Add), Box::new(Exp::Num(1)))),
-                Box::new(Exp::Num(2))
+            Expr::Ap(
+                Box::new(Expr::Ap(Box::new(Expr::Add), Box::new(Expr::Num(1)))),
+                Box::new(Expr::Num(2))
             )
         );
         assert_eq!(
             parse_src("ap ap eq 1 2")?,
-            Exp::Ap(
-                Box::new(Exp::Ap(Box::new(Exp::Eq), Box::new(Exp::Num(1)))),
-                Box::new(Exp::Num(2))
+            Expr::Ap(
+                Box::new(Expr::Ap(Box::new(Expr::Eq), Box::new(Expr::Num(1)))),
+                Box::new(Expr::Num(2))
             )
         );
         assert!(parse_src("add 1").is_err());
@@ -416,8 +376,8 @@ mod tests {
 
     #[test]
     fn eval_test() -> Result<()> {
-        let t = Value::Func(Exp::T);
-        let f = Value::Func(Exp::F);
+        let t = Value::Func(Expr::T);
+        let f = Value::Func(Expr::F);
 
         // add
         assert_eq!(eval_src("ap ap add 1 2")?, Value::Num(3));
@@ -490,8 +450,8 @@ mod tests {
         // ap ap t t ap inc 5   =   t
         // ap ap t ap inc 5 t   =   6
         assert_eq!(eval_src("ap ap t 1 5")?, Value::Num(1));
-        assert_eq!(eval_src("ap ap t t 1")?, Value::Func(Exp::T));
-        assert_eq!(eval_src("ap ap t t ap inc 5")?, Value::Func(Exp::T));
+        assert_eq!(eval_src("ap ap t t 1")?, Value::Func(Expr::T));
+        assert_eq!(eval_src("ap ap t t ap inc 5")?, Value::Func(Expr::T));
         assert_eq!(eval_src("ap ap t ap inc 5 t")?, Value::Num(6));
 
         // f
@@ -499,7 +459,7 @@ mod tests {
 
         // i
         assert_eq!(eval_src("ap i 0")?, Value::Num(0));
-        assert_eq!(eval_src("ap i i")?, Value::Func(Exp::I));
+        assert_eq!(eval_src("ap i i")?, Value::Func(Expr::I));
 
         Ok(())
     }
@@ -515,11 +475,11 @@ mod tests {
 
         // nil
         // ap nil x0   =   t
-        assert_eq!(eval_src("ap nil 1")?, Value::Func(Exp::T));
+        assert_eq!(eval_src("ap nil 1")?, Value::Func(Expr::T));
 
         // isnil
-        assert_eq!(eval_src("ap isnil nil")?, Value::Func(Exp::T));
-        assert_eq!(eval_src("ap isnil 1")?, Value::Func(Exp::F));
+        assert_eq!(eval_src("ap isnil nil")?, Value::Func(Expr::T));
+        assert_eq!(eval_src("ap isnil 1")?, Value::Func(Expr::F));
 
         Ok(())
     }
@@ -579,6 +539,8 @@ galaxy = :2
 
     #[test]
     fn eval_recursive_func_1141_test() -> Result<()> {
+        init_env_logger();
+
         // :1141 = ap ap c b ap ap s ap ap b c ap ap b ap b b ap eq 0 ap ap b ap c :1141 ap add -1
 
         // Ap(Ap(C, B),
@@ -595,6 +557,7 @@ galaxy = :2
 galaxy = :1141
 ";
         println!("1141 result: {:?}", eval_galaxy_src(&src));
+        // 1141 result: Ok(PartialAp2(C, B, Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, B)), Ap(Eq, Num(0))))), Ap(Ap(B, Ap(C, Var(1141))), Ap(Add, Num(-1))))))
         Ok(())
     }
 
@@ -604,6 +567,7 @@ galaxy = :1141
         path.push("task/galaxy.txt");
         let src = std::fs::read_to_string(path)?.trim().to_string();
         println!("galaxy result: {:?}", eval_galaxy_src(&src));
+        // [2020-07-19 Sun] galaxy result: Ok(PartialAp2(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Var(1342))), Var(1328))), Var(1336)))
         Ok(())
     }
 }
