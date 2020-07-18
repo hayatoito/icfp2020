@@ -381,6 +381,7 @@ dependencies = [
  "env_logger",
  "log",
  "reqwest",
+ "serde_json",
  "structopt",
 ]
 
