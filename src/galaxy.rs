@@ -30,8 +30,7 @@ pub enum Exp {
     Eq,
     Lt,
     Neg,
-    // S,
-
+    S,
     // True,  // Later
     // False,
 }
@@ -44,7 +43,7 @@ pub enum EvalResult {
     // e.g. "ap add 1"
     PartialAp1(Exp, Box<EvalResult>),
     // e.g. "ap ap s x y"
-    // PartialAp2(Exp, Box<EvalResult>, Box<EvalResult>),
+    PartialAp2(Exp, Box<EvalResult>, Box<EvalResult>),
     True,
     False,
 }
@@ -85,10 +84,10 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
             exp: Exp::Neg,
             tokens,
         }),
-        // "s" => Ok(ParseResult {
-        //     exp: Exp::S,
-        //     tokens,
-        // }),
+        "s" => Ok(ParseResult {
+            exp: Exp::S,
+            tokens,
+        }),
         x => {
             let num: i64 = x.parse()?;
             Ok(ParseResult {
@@ -105,24 +104,7 @@ fn eval(exp: Exp) -> Result<EvalResult> {
         Exp::Ap(left, right) => {
             let left = eval(*left)?;
             let right = eval(*right)?;
-            match left {
-                // functions which take 1 parameter.
-                EvalResult::LeafFunc(Exp::Neg) => match right {
-                    EvalResult::Num(n) => Ok(EvalResult::Num(-n)),
-                    _ => bail!("can not negate non-numger"),
-                },
-                // Other functions which take n > 1 parameters.
-                EvalResult::LeafFunc(func) => Ok(EvalResult::PartialAp1(func, Box::new(right))),
-                // // functions which take 3 parameter. e.g. S-Combinator
-                // EvalResult::PartialAp(Exp::S, op1) => {
-                //     Ok(EvalResult::PartialAp2(Exp::S, op1, Box::new(right)))
-                // }
-                EvalResult::PartialAp1(func, op1) => apply_func(func, *op1, right),
-                _ => bail!(format!(
-                    "Eval error: can not apply app {:?} {:?}",
-                    left, right
-                )),
-            }
+            apply(left, right)
         }
         Exp::Add => Ok(EvalResult::LeafFunc(Exp::Add)),
         Exp::Mul => Ok(EvalResult::LeafFunc(Exp::Mul)),
@@ -130,30 +112,53 @@ fn eval(exp: Exp) -> Result<EvalResult> {
         Exp::Eq => Ok(EvalResult::LeafFunc(Exp::Eq)),
         Exp::Lt => Ok(EvalResult::LeafFunc(Exp::Lt)),
         Exp::Neg => Ok(EvalResult::LeafFunc(Exp::Neg)),
-        // Exp::S => Ok(EvalResult::LeafFunc(Exp::S)),
+        Exp::S => Ok(EvalResult::LeafFunc(Exp::S)),
     }
 }
 
-fn apply_func(func: Exp, op1: EvalResult, op2: EvalResult) -> Result<EvalResult> {
-    match (func, op1, op2) {
-        (Exp::Add, EvalResult::Num(n1), EvalResult::Num(n2)) => Ok(EvalResult::Num(n1 + n2)),
-        (Exp::Mul, EvalResult::Num(n1), EvalResult::Num(n2)) => Ok(EvalResult::Num(n1 * n2)),
-        (Exp::Div, EvalResult::Num(n1), EvalResult::Num(n2)) => Ok(EvalResult::Num(n1 / n2)),
-        (Exp::Eq, EvalResult::Num(n1), EvalResult::Num(n2)) => {
-            if n1 == n2 {
-                Ok(EvalResult::True)
-            } else {
-                Ok(EvalResult::False)
+fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
+    match f {
+        EvalResult::LeafFunc(exp) => match (exp, x0) {
+            (Exp::Neg, EvalResult::Num(n)) => Ok(EvalResult::Num(-n)),
+            (Exp::Neg, _) => bail!("can not apply"),
+            (exp, x0) => Ok(EvalResult::PartialAp1(exp, Box::new(x0))),
+        },
+        EvalResult::PartialAp1(exp, op0) => match (exp, *op0, x0) {
+            (Exp::Add, EvalResult::Num(n1), EvalResult::Num(n2)) => Ok(EvalResult::Num(n1 + n2)),
+            (Exp::Mul, EvalResult::Num(n1), EvalResult::Num(n2)) => Ok(EvalResult::Num(n1 * n2)),
+            (Exp::Div, EvalResult::Num(n1), EvalResult::Num(n2)) => Ok(EvalResult::Num(n1 / n2)),
+            (Exp::Eq, EvalResult::Num(n1), EvalResult::Num(n2)) => {
+                if n1 == n2 {
+                    Ok(EvalResult::True)
+                } else {
+                    Ok(EvalResult::False)
+                }
             }
-        }
-        (Exp::Lt, EvalResult::Num(n1), EvalResult::Num(n2)) => {
-            if n1 < n2 {
-                Ok(EvalResult::True)
-            } else {
-                Ok(EvalResult::False)
+            (Exp::Lt, EvalResult::Num(n1), EvalResult::Num(n2)) => {
+                if n1 < n2 {
+                    Ok(EvalResult::True)
+                } else {
+                    Ok(EvalResult::False)
+                }
             }
+            (Exp::S, op0, x0) => Ok(EvalResult::PartialAp2(Exp::S, Box::new(op0), Box::new(x0))),
+            _ => bail!("Eval error: can not apply"),
+        },
+        EvalResult::PartialAp2(exp, op0, op1) => match (exp, *op0, *op1, x0) {
+            (Exp::S, x0, x1, x2) => {
+                // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
+                // ap ap ap s add inc 1   =   3
+
+                // TODO: Avoid clone. Use Rc?
+                let ap_x0_x2 = apply(x0, x2.clone())?;
+                let ap_x1_x2 = apply(x1, x2)?;
+                apply(ap_x0_x2, ap_x1_x2)
+            }
+            _ => bail!("can not apply"),
+        },
+        _ => {
+            bail!("can not apply");
         }
-        _ => bail!("Eval error: can not apply"),
     }
 }
 
@@ -233,6 +238,10 @@ mod tests {
         assert_eq!(eval_src("ap neg 1")?, EvalResult::Num(-1));
         assert_eq!(eval_src("ap neg -1")?, EvalResult::Num(1));
         assert_eq!(eval_src("ap ap add ap neg 1 2")?, EvalResult::Num(1));
+
+        // s
+        // assert_eq!(eval_src("ap ap ap s add inc 1", EvalResult::Num(3));  // inc is not implemented yet.
+        assert_eq!(eval_src("ap ap ap s mul ap add 1 6")?, EvalResult::Num(42));
 
         Ok(())
     }
