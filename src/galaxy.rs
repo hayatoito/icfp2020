@@ -30,11 +30,13 @@ pub enum Exp {
     Eq,
     Lt,
     Neg,
+    Inc,
+    Dec,
     S,
     C,
     B,
-    // True,  // Later
-    // False,
+    T, // True
+       // False,
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -86,6 +88,14 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
             exp: Exp::Neg,
             tokens,
         }),
+        "inc" => Ok(ParseResult {
+            exp: Exp::Inc,
+            tokens,
+        }),
+        "dec" => Ok(ParseResult {
+            exp: Exp::Dec,
+            tokens,
+        }),
         "s" => Ok(ParseResult {
             exp: Exp::S,
             tokens,
@@ -98,8 +108,13 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
             exp: Exp::B,
             tokens,
         }),
+        "t" => Ok(ParseResult {
+            exp: Exp::T,
+            tokens,
+        }),
         x => {
-            let num: i64 = x.parse()?;
+            // TODO: Add context error message.
+            let num: i64 = x.parse().context("number parse error")?;
             Ok(ParseResult {
                 exp: Exp::Num(num),
                 tokens,
@@ -112,6 +127,8 @@ fn eval(exp: Exp) -> Result<EvalResult> {
     match exp {
         Exp::Num(n) => Ok(EvalResult::Num(n)),
         Exp::Ap(left, right) => {
+            // TODO: Don't eval right hand if we don't use it.
+            // e.g. app app t 1 long-expression  => we don't need to eval long-expression
             let left = eval(*left)?;
             let right = eval(*right)?;
             apply(left, right)
@@ -122,9 +139,12 @@ fn eval(exp: Exp) -> Result<EvalResult> {
         Exp::Eq => Ok(EvalResult::LeafFunc(Exp::Eq)),
         Exp::Lt => Ok(EvalResult::LeafFunc(Exp::Lt)),
         Exp::Neg => Ok(EvalResult::LeafFunc(Exp::Neg)),
+        Exp::Inc => Ok(EvalResult::LeafFunc(Exp::Inc)),
+        Exp::Dec => Ok(EvalResult::LeafFunc(Exp::Dec)),
         Exp::S => Ok(EvalResult::LeafFunc(Exp::S)),
         Exp::C => Ok(EvalResult::LeafFunc(Exp::C)),
         Exp::B => Ok(EvalResult::LeafFunc(Exp::B)),
+        Exp::T => Ok(EvalResult::LeafFunc(Exp::T)),
     }
 }
 
@@ -133,6 +153,10 @@ fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
         EvalResult::LeafFunc(exp) => match (exp, x0) {
             (Exp::Neg, EvalResult::Num(n)) => Ok(EvalResult::Num(-n)),
             (Exp::Neg, _) => bail!("can not apply"),
+            (Exp::Inc, EvalResult::Num(n)) => Ok(EvalResult::Num(n + 1)),
+            (Exp::Inc, _) => bail!("can not apply"),
+            (Exp::Dec, EvalResult::Num(n)) => Ok(EvalResult::Num(n - 1)),
+            (Exp::Dec, _) => bail!("can not apply"),
             (exp, x0) => Ok(EvalResult::PartialAp1(exp, Box::new(x0))),
         },
         EvalResult::PartialAp1(exp, op0) => match (exp, *op0, x0) {
@@ -156,6 +180,7 @@ fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
             (Exp::S, x0, x1) => Ok(EvalResult::PartialAp2(Exp::S, Box::new(x0), Box::new(x1))),
             (Exp::C, x0, x1) => Ok(EvalResult::PartialAp2(Exp::C, Box::new(x0), Box::new(x1))),
             (Exp::B, x0, x1) => Ok(EvalResult::PartialAp2(Exp::B, Box::new(x0), Box::new(x1))),
+            (Exp::T, x0, _) => Ok(x0),
             (exp, x0, x1) => bail!("can not apply: exp: {:?}, x0: {:?}, x1: {:?}", exp, x0, x1),
         },
         EvalResult::PartialAp2(exp, op0, op1) => match (exp, *op0, *op1, x0) {
@@ -263,6 +288,14 @@ mod tests {
         assert_eq!(eval_src("ap neg -1")?, EvalResult::Num(1));
         assert_eq!(eval_src("ap ap add ap neg 1 2")?, EvalResult::Num(1));
 
+        // inc
+        assert_eq!(eval_src("ap inc 0")?, EvalResult::Num(1));
+        assert_eq!(eval_src("ap inc 1")?, EvalResult::Num(2));
+
+        // dec
+        assert_eq!(eval_src("ap dec 0")?, EvalResult::Num(-1));
+        assert_eq!(eval_src("ap dec 1")?, EvalResult::Num(0));
+
         // s
         // assert_eq!(eval_src("ap ap ap s add inc 1", EvalResult::Num(3));  // inc is not implemented yet.
         assert_eq!(eval_src("ap ap ap s mul ap add 1 6")?, EvalResult::Num(42));
@@ -274,6 +307,20 @@ mod tests {
         // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
         // ap ap ap b inc dec x0   =   x0
         assert_eq!(eval_src("ap ap ap b neg neg 1")?, EvalResult::Num(1));
+
+        // t
+        // ap ap t x0 x1   =   x0
+        // ap ap t 1 5   =   1
+        // ap ap t t i   =   t
+        // ap ap t t ap inc 5   =   t
+        // ap ap t ap inc 5 t   =   6
+        assert_eq!(eval_src("ap ap t 1 5")?, EvalResult::Num(1));
+        assert_eq!(eval_src("ap ap t t 1")?, EvalResult::LeafFunc(Exp::T));
+        assert_eq!(
+            eval_src("ap ap t t ap inc 5")?,
+            EvalResult::LeafFunc(Exp::T)
+        );
+        assert_eq!(eval_src("ap ap t ap inc 5 t")?, EvalResult::Num(6));
 
         Ok(())
     }
