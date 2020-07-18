@@ -31,6 +31,8 @@ pub enum Exp {
     Lt,
     Neg,
     S,
+    C,
+    B,
     // True,  // Later
     // False,
 }
@@ -88,6 +90,14 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
             exp: Exp::S,
             tokens,
         }),
+        "c" => Ok(ParseResult {
+            exp: Exp::C,
+            tokens,
+        }),
+        "b" => Ok(ParseResult {
+            exp: Exp::B,
+            tokens,
+        }),
         x => {
             let num: i64 = x.parse()?;
             Ok(ParseResult {
@@ -113,6 +123,8 @@ fn eval(exp: Exp) -> Result<EvalResult> {
         Exp::Lt => Ok(EvalResult::LeafFunc(Exp::Lt)),
         Exp::Neg => Ok(EvalResult::LeafFunc(Exp::Neg)),
         Exp::S => Ok(EvalResult::LeafFunc(Exp::S)),
+        Exp::C => Ok(EvalResult::LeafFunc(Exp::C)),
+        Exp::B => Ok(EvalResult::LeafFunc(Exp::B)),
     }
 }
 
@@ -141,8 +153,10 @@ fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
                     Ok(EvalResult::False)
                 }
             }
-            (Exp::S, op0, x0) => Ok(EvalResult::PartialAp2(Exp::S, Box::new(op0), Box::new(x0))),
-            _ => bail!("Eval error: can not apply"),
+            (Exp::S, x0, x1) => Ok(EvalResult::PartialAp2(Exp::S, Box::new(x0), Box::new(x1))),
+            (Exp::C, x0, x1) => Ok(EvalResult::PartialAp2(Exp::C, Box::new(x0), Box::new(x1))),
+            (Exp::B, x0, x1) => Ok(EvalResult::PartialAp2(Exp::B, Box::new(x0), Box::new(x1))),
+            (exp, x0, x1) => bail!("can not apply: exp: {:?}, x0: {:?}, x1: {:?}", exp, x0, x1),
         },
         EvalResult::PartialAp2(exp, op0, op1) => match (exp, *op0, *op1, x0) {
             (Exp::S, x0, x1, x2) => {
@@ -153,6 +167,16 @@ fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
                 let ap_x0_x2 = apply(x0, x2.clone())?;
                 let ap_x1_x2 = apply(x1, x2)?;
                 apply(ap_x0_x2, ap_x1_x2)
+            }
+            (Exp::C, x0, x1, x2) => {
+                // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
+                // ap ap ap c add 1 2   =   3
+                apply(apply(x0, x2)?, x1)
+            }
+            (Exp::B, x0, x1, x2) => {
+                // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
+                // ap ap ap b inc dec x0   =   x0
+                apply(x0, apply(x1, x2)?)
             }
             _ => bail!("can not apply"),
         },
@@ -242,6 +266,14 @@ mod tests {
         // s
         // assert_eq!(eval_src("ap ap ap s add inc 1", EvalResult::Num(3));  // inc is not implemented yet.
         assert_eq!(eval_src("ap ap ap s mul ap add 1 6")?, EvalResult::Num(42));
+
+        // c
+        assert_eq!(eval_src("ap ap ap c add 1 2")?, EvalResult::Num(3));
+
+        // b
+        // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
+        // ap ap ap b inc dec x0   =   x0
+        assert_eq!(eval_src("ap ap ap b neg neg 1")?, EvalResult::Num(1));
 
         Ok(())
     }
