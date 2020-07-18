@@ -37,6 +37,7 @@ pub enum Exp {
     B,
     T, // True
     F, // False,
+    I,
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -116,6 +117,10 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
             exp: Exp::F,
             tokens,
         }),
+        "i" => Ok(ParseResult {
+            exp: Exp::I,
+            tokens,
+        }),
         x => {
             // TODO: Add context error message.
             let num: i64 = x.parse().context("number parse error")?;
@@ -150,6 +155,7 @@ fn eval(exp: Exp) -> Result<EvalResult> {
         Exp::B => Ok(EvalResult::LeafFunc(Exp::B)),
         Exp::T => Ok(EvalResult::LeafFunc(Exp::T)),
         Exp::F => Ok(EvalResult::LeafFunc(Exp::F)),
+        Exp::I => Ok(EvalResult::LeafFunc(Exp::I)),
     }
 }
 
@@ -162,6 +168,7 @@ fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
             (Exp::Inc, _) => bail!("can not apply"),
             (Exp::Dec, EvalResult::Num(n)) => Ok(EvalResult::Num(n - 1)),
             (Exp::Dec, _) => bail!("can not apply"),
+            (Exp::I, x0) => Ok(x0),
             (exp, x0) => Ok(EvalResult::PartialAp1(exp, Box::new(x0))),
         },
         EvalResult::PartialAp1(exp, op0) => match (exp, *op0, x0) {
@@ -330,6 +337,10 @@ mod tests {
 
         // f
         assert_eq!(eval_src("ap ap f 1 2")?, EvalResult::Num(2));
+
+        // i
+        assert_eq!(eval_src("ap i 0")?, EvalResult::Num(0));
+        assert_eq!(eval_src("ap i i")?, EvalResult::LeafFunc(Exp::I));
 
         Ok(())
     }
