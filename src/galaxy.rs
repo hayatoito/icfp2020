@@ -41,6 +41,8 @@ pub enum Exp {
     Cons,
     Car,
     Cdr,
+    Nil,
+    Isnil,
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -136,6 +138,14 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
             exp: Exp::Cdr,
             tokens,
         }),
+        "nil" => Ok(ParseResult {
+            exp: Exp::Nil,
+            tokens,
+        }),
+        "isnil" => Ok(ParseResult {
+            exp: Exp::Isnil,
+            tokens,
+        }),
         x => {
             // TODO: Add context error message.
             let num: i64 = x.parse().context("number parse error")?;
@@ -175,6 +185,8 @@ fn eval(exp: Exp) -> Result<EvalResult> {
         Exp::Cons => Ok(EvalResult::LeafFunc(Exp::Cons)),
         Exp::Car => Ok(EvalResult::LeafFunc(Exp::Car)),
         Exp::Cdr => Ok(EvalResult::LeafFunc(Exp::Cdr)),
+        Exp::Nil => Ok(EvalResult::LeafFunc(Exp::Nil)),
+        Exp::Isnil => Ok(EvalResult::LeafFunc(Exp::Isnil)),
     }
 }
 
@@ -192,6 +204,9 @@ fn apply(f: EvalResult, x0: EvalResult) -> Result<EvalResult> {
             // ap car x2 = ap x2 t
             (Exp::Car, x0) => apply(x0, EvalResult::LeafFunc(Exp::T)),
             (Exp::Cdr, x0) => apply(x0, EvalResult::LeafFunc(Exp::F)),
+            (Exp::Nil, _) => Ok(EvalResult::LeafFunc(Exp::T)),
+            (Exp::Isnil, EvalResult::LeafFunc(Exp::Nil)) => Ok(EvalResult::LeafFunc(Exp::T)),
+            (Exp::Isnil, _) => Ok(EvalResult::LeafFunc(Exp::F)),
             (exp, x0) => Ok(EvalResult::PartialAp1(exp, Box::new(x0))),
         },
         EvalResult::PartialAp1(exp, op0) => match (exp, *op0, x0) {
@@ -396,6 +411,14 @@ mod tests {
         // ap car x2   =   ap x2 t
         assert_eq!(eval_src("ap car ap ap cons 0 1")?, EvalResult::Num(0));
         assert_eq!(eval_src("ap cdr ap ap cons 0 1")?, EvalResult::Num(1));
+
+        // nil
+        // ap nil x0   =   t
+        assert_eq!(eval_src("ap nil 1")?, EvalResult::LeafFunc(Exp::T));
+
+        // isnil
+        assert_eq!(eval_src("ap isnil nil")?, EvalResult::LeafFunc(Exp::T));
+        assert_eq!(eval_src("ap isnil 1")?, EvalResult::LeafFunc(Exp::F));
 
         Ok(())
     }
