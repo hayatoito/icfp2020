@@ -232,6 +232,46 @@ fn images_to_points(images: Expr) -> Result<Vec<(i64, i64)>> {
     Ok(points)
 }
 
+fn demodulate(s: &str) -> Result<Expr> {
+    let mut pos = 0;
+    let mut tokens = String::new();
+    while pos < s.len() {
+        match &s[pos..(pos + 2)] {
+            "00" => {
+                tokens.push_str(" nil");
+                pos += 2;
+            }
+            "11" => {
+                tokens.push_str(" ap ap cons");
+                pos += 2;
+            }
+            sign => {
+                pos += 2;
+                if &s[pos..=pos] == "0" {
+                    tokens.push_str(" 0");
+                    pos += 1;
+                } else {
+                    for prefix in MOD_NUM_PREFIX.iter() {
+                        if s[pos..].starts_with(prefix) {
+                            pos += prefix.len();
+                            let width = (prefix.len() - 1) * 4;
+                            let rep = &s[pos..(pos + width)];
+                            pos += width;
+                            let mut num = i64::from_str_radix(rep, 2)?;
+                            if sign == "10" {
+                                num = -num;
+                            }
+                            tokens.push_str(&format!(" {}", num));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    parse_src(&tokens)
+}
+
 fn cons_car_cdr(e: Expr) -> Result<(Expr, Expr)> {
     if let Ap(a, cdr) = e {
         if let Ap(b, car) = a.expr {
@@ -257,6 +297,25 @@ fn modulate_expr(e: Expr) -> Result<String> {
     }
 }
 
+const MOD_NUM_PREFIX: [&str; 16] = [
+    "10",
+    "110",
+    "1110",
+    "11110",
+    "111110",
+    "1111110",
+    "11111110",
+    "111111110",
+    "1111111110",
+    "11111111110",
+    "111111111110",
+    "1111111111110",
+    "11111111111110",
+    "111111111111110",
+    "1111111111111110",
+    "11111111111111110",
+];
+
 fn modulate_num(n: i64) -> String {
     let mut modulated = String::new();
     if n == 0 {
@@ -268,30 +327,9 @@ fn modulate_num(n: i64) -> String {
         modulated.push_str("10");
     }
 
-    let prefix = [
-        "10",
-        "110",
-        "1110",
-        "11110",
-        "111110",
-        "1111110",
-        "11111110",
-        "111111110",
-        "1111111110",
-        "11111111110",
-        "111111111110",
-        "1111111111110",
-        "11111111111110",
-        "111111111111110",
-        "1111111111111110",
-        "11111111111111110",
-    ];
-
-    assert_eq!(prefix.len(), 16);
-
     let n: u128 = (n as i128).abs() as u128;
 
-    for (i, prefix) in prefix.iter().enumerate() {
+    for (i, prefix) in MOD_NUM_PREFIX.iter().enumerate() {
         let bits = (i + 1) * 4;
         if n < ((1 as u128) << bits) {
             modulated.push_str(prefix);
@@ -1016,6 +1054,19 @@ mod tests {
             "1101100001110110001000"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn demodulate_test() -> Result<()> {
+        assert_eq!(demodulate("010")?, Num(0));
+        assert_eq!(demodulate("01100001")?, Num(1));
+        assert_eq!(demodulate("10100001")?, Num(-1));
+        assert_eq!(demodulate("110000")?, ap(ap(Cons, Nil), Nil));
+        assert_eq!(
+            demodulate("1101100001110110001000")?,
+            ap(ap(Cons, Num(1)), ap(ap(Cons, Num(2)), Nil))
+        );
         Ok(())
     }
 }
