@@ -60,8 +60,7 @@ fn ap(e0: Expr, e1: Expr) -> Expr {
 pub enum Value {
     Num(i64),
     Func(Expr),
-    PartialAp1(Expr, Expr),
-    PartialAp2(Expr, Expr, Expr),
+    Ap(Expr, Expr),
 }
 
 fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
@@ -230,6 +229,7 @@ impl Galaxy {
         debug!("apply: f: {:?}, x0: {:?}", f, x0);
         let f = self.eval(f)?;
         match f {
+            Value::Num(_) => bail!("can not apply"),
             Value::Func(exp) => match exp {
                 Expr::Neg => match self.eval(x0)? {
                     Value::Num(n) => Ok(Value::Num(-n)),
@@ -252,86 +252,92 @@ impl Galaxy {
                     Value::Func(Expr::Nil) => Ok(Value::Func(Expr::T)),
                     _ => Ok(Value::Func(Expr::F)),
                 },
-                exp => Ok(Value::PartialAp1(exp, x0)),
+                exp => Ok(Value::Ap(exp, x0)),
             },
-            Value::PartialAp1(exp, e0) => {
-                let e1 = x0; // For readability.
-                match exp {
-                    Expr::Add => match (self.eval(e0)?, self.eval(e1)?) {
-                        (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 + n1)),
-                        _ => bail!("can not apply"),
-                    },
-                    Expr::Mul => match (self.eval(e0)?, self.eval(e1)?) {
-                        (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 * n1)),
-                        _ => bail!("can not apply"),
-                    },
-                    Expr::Div => match (self.eval(e0)?, self.eval(e1)?) {
-                        (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 / n1)),
-                        _ => bail!("can not apply"),
-                    },
-                    Expr::Eq => match (self.eval(e0)?, self.eval(e1)?) {
-                        (Value::Num(n0), Value::Num(n1)) => {
-                            if n0 == n1 {
-                                Ok(Value::Func(Expr::T))
-                            } else {
-                                Ok(Value::Func(Expr::F))
+            Value::Ap(exp, e0) => {
+                let (e0, e1) = (e0, x0); // For readability.
+                let f = self.eval(exp)?;
+                match f {
+                    Value::Func(exp) => match exp {
+                        Expr::Add => match (self.eval(e0)?, self.eval(e1)?) {
+                            (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 + n1)),
+                            _ => bail!("can not apply"),
+                        },
+                        Expr::Mul => match (self.eval(e0)?, self.eval(e1)?) {
+                            (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 * n1)),
+                            _ => bail!("can not apply"),
+                        },
+                        Expr::Div => match (self.eval(e0)?, self.eval(e1)?) {
+                            (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 / n1)),
+                            _ => bail!("can not apply"),
+                        },
+                        Expr::Eq => match (self.eval(e0)?, self.eval(e1)?) {
+                            (Value::Num(n0), Value::Num(n1)) => {
+                                if n0 == n1 {
+                                    Ok(Value::Func(Expr::T))
+                                } else {
+                                    Ok(Value::Func(Expr::F))
+                                }
                             }
-                        }
-                        _ => bail!("can not apply"),
-                    },
-                    Expr::Lt => match (self.eval(e0)?, self.eval(e1)?) {
-                        (Value::Num(n0), Value::Num(n1)) => {
-                            if n0 < n1 {
-                                Ok(Value::Func(Expr::T))
-                            } else {
-                                Ok(Value::Func(Expr::F))
+                            _ => bail!("can not apply"),
+                        },
+                        Expr::Lt => match (self.eval(e0)?, self.eval(e1)?) {
+                            (Value::Num(n0), Value::Num(n1)) => {
+                                if n0 < n1 {
+                                    Ok(Value::Func(Expr::T))
+                                } else {
+                                    Ok(Value::Func(Expr::F))
+                                }
                             }
-                        }
-                        _ => bail!("can not apply"),
+                            _ => bail!("can not apply"),
+                        },
+                        Expr::T => self.eval(e0),
+                        Expr::F => self.eval(e1),
+                        Expr::S => Ok(Value::Ap(ap(Expr::S, e0), e1)),
+                        Expr::C => Ok(Value::Ap(ap(Expr::C, e0), e1)),
+                        Expr::B => Ok(Value::Ap(ap(Expr::B, e0), e1)),
+                        Expr::Cons => Ok(Value::Ap(ap(Expr::Cons, e0), e1)),
+                        exp => bail!("can not apply: exp: {:?}, e0: {:?}, e1: {:?}", exp, e0, e1),
                     },
-                    Expr::S => Ok(Value::PartialAp2(Expr::S, e0, e1)),
-                    Expr::C => Ok(Value::PartialAp2(Expr::C, e0, e1)),
-                    Expr::B => Ok(Value::PartialAp2(Expr::B, e0, e1)),
-                    Expr::T => self.eval(e0),
-                    // New
-                    Expr::F => self.eval(e1),
-                    Expr::Cons => Ok(Value::PartialAp2(Expr::Cons, e0, e1)),
-                    exp => bail!("can not apply: exp: {:?}, e0: {:?}, e1: {:?}", exp, e0, e1),
-                }
-            }
-            Value::PartialAp2(exp, e0, e1) => {
-                let e2 = x0;
-                match exp {
-                    Expr::S => {
-                        // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
-                        // ap ap ap s add inc 1   =   3
+                    Value::Ap(exp, e) => {
+                        let (e0, e1, e2) = (e, e0, e1);
+                        let f = self.eval(exp)?;
+                        match f {
+                            Value::Func(exp) => match exp {
+                                Expr::S => {
+                                    // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
+                                    // ap ap ap s add inc 1   =   3
 
-                        // let new_var = Expr::Var(self.add_new_var(e2));
-                        let new_var = e2;
+                                    // let new_var = Expr::Var(self.add_new_var(e2));
+                                    let new_var = e2;
 
-                        let ap_x0_x2 = ap(e0, new_var.clone());
-                        let ap_x1_x2 = ap(e1, new_var);
-                        self.apply(ap_x0_x2, ap_x1_x2)
-                    }
-                    Expr::C => {
-                        // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
-                        // ap ap ap c add 1 2   =   3
-                        self.apply(ap(e0, e2), e1)
-                    }
-                    Expr::B => {
-                        // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
-                        // ap ap ap b inc dec x0   =   x0
-                        self.apply(e0, ap(e1, e2))
-                    }
-                    Expr::Cons => {
-                        // cons
-                        // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
-                        self.apply(ap(e2, e0), e1)
+                                    let ap_x0_x2 = ap(e0, new_var.clone());
+                                    let ap_x1_x2 = ap(e1, new_var);
+                                    self.apply(ap_x0_x2, ap_x1_x2)
+                                }
+                                Expr::C => {
+                                    // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
+                                    // ap ap ap c add 1 2   =   3
+                                    self.apply(ap(e0, e2), e1)
+                                }
+                                Expr::B => {
+                                    // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
+                                    // ap ap ap b inc dec x0   =   x0
+                                    self.apply(e0, ap(e1, e2))
+                                }
+                                Expr::Cons => {
+                                    // cons
+                                    // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
+                                    self.apply(ap(e2, e0), e1)
+                                }
+                                _ => bail!("can not apply"),
+                            },
+                            _ => bail!("can not apply"),
+                        }
                     }
                     _ => bail!("can not apply"),
                 }
             }
-            Value::Num(_) => bail!("can not apply"),
         }
     }
 }
@@ -589,7 +595,7 @@ mod tests {
         // println!("1141 result: {:?}", result);
         assert_eq!(
                 format!("{:?}", result),
-                "PartialAp2(C, B, Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, B)), Ap(Eq, Num(0))))), Ap(Ap(B, Ap(C, Var(1141))), Ap(Add, Num(-1)))))");
+                "Ap(Ap(C, B), Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, B)), Ap(Eq, Num(0))))), Ap(Ap(B, Ap(C, Var(1141))), Ap(Add, Num(-1)))))");
         Ok(())
     }
 
@@ -603,7 +609,7 @@ mod tests {
         // println!("galaxy result: {:?}", result);
         assert_eq!(
             format!("{:?}", result),
-            "PartialAp2(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Var(1342))), Var(1328))), Var(1336))"
+            "Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Var(1342))), Var(1328)))), Var(1336))"
         );
         Ok(())
     }
@@ -622,7 +628,7 @@ mod tests {
 
         assert_eq!(
             format!("{:?}", res),
-            "PartialAp2(Cons, Num(0), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Cons)), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(C, Var(1144)), Num(1)))), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(B, B), Isnil))), Ap(Ap(S, Ap(Ap(B, B), Cons)), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Cons)), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1141))), Ap(C, Var(1141))))), Num(1))))), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil)))))))), I), Nil), Var(1328)), Var(1336))), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(B, Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1204))), Var(1162)))), Ap(Ap(Ap(Ap(Var(1166), Ap(Neg, Num(3))), Ap(Neg, Num(3))), Num(7)), Num(7)))))), Ap(Ap(C, Add), Num(1)))))), I), Ap(Neg, Num(1))), Num(0)), Num(0)))), Ap(Var(1229), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(B, Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1204))), Var(1162)))), Ap(Ap(Ap(Ap(Var(1166), Ap(Neg, Num(3))), Ap(Neg, Num(3))), Num(7)), Num(7)))))), Ap(Ap(C, Add), Num(1)))))), I), Ap(Neg, Num(1))), Num(0)), Num(0)))))"
+            "Ap(Ap(Cons, Num(0)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Cons)), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(C, Var(1144)), Num(1)))), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(B, B), Isnil))), Ap(Ap(S, Ap(Ap(B, B), Cons)), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Cons)), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1141))), Ap(C, Var(1141))))), Num(1))))), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil)))))))), I), Nil), Var(1328)), Var(1336))), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(B, Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1204))), Var(1162)))), Ap(Ap(Ap(Ap(Var(1166), Ap(Neg, Num(3))), Ap(Neg, Num(3))), Num(7)), Num(7)))))), Ap(Ap(C, Add), Num(1)))))), I), Ap(Neg, Num(1))), Num(0)), Num(0)))), Ap(Var(1229), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(B, Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1204))), Var(1162)))), Ap(Ap(Ap(Ap(Var(1166), Ap(Neg, Num(3))), Ap(Neg, Num(3))), Num(7)), Num(7)))))), Ap(Ap(C, Add), Num(1)))))), I), Ap(Neg, Num(1))), Num(0)), Num(0)))))"
         );
 
         // Var(429)???
