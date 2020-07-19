@@ -494,11 +494,19 @@ impl Galaxy {
             Ok(e)
         } else {
             trace!("eval: {:?} -> toeval", e);
-            let res = self.eval_internal(e.expr)?;
-            trace!("eval result: {:?}", res);
-            let mut res: E = res.into();
-            res.evaluated = true;
-            Ok(res)
+            let mut e = e.expr;
+            loop {
+                let res = self.eval_internal(e.clone())?;
+                trace!("eval result: {:?}", res);
+                if res == e {
+                    return Ok(E {
+                        expr: res,
+                        evaluated: true,
+                    });
+                } else {
+                    e = res;
+                }
+            }
         }
     }
 
@@ -531,8 +539,11 @@ impl Galaxy {
             },
             I => Ok(self.eval(x0)?.expr),
             // ap car x2 = ap x2 t
-            Car => self.apply(x0, T),
-            Cdr => self.apply(x0, F),
+            // Car => self.apply(x0, T),
+            // Cdr => self.apply(x0, F),
+            // Avoid recursion
+            Car => Ok(ap(x0, T)),
+            Cdr => Ok(ap(x0, F)),
             Nil => Ok(T),
             Isnil => match self.eval(x0)?.expr {
                 Nil => Ok(T),
@@ -604,22 +615,26 @@ impl Galaxy {
 
                                 let ap_x0_x2 = ap(e0, e2.clone());
                                 let ap_x1_x2 = ap(e1, e2);
-                                self.apply(ap_x0_x2, ap_x1_x2)
+                                // self.apply(ap_x0_x2, ap_x1_x2)
+                                Ok(ap(ap_x0_x2, ap_x1_x2))
                             }
                             C => {
                                 // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
                                 // ap ap ap c add 1 2   =   3
-                                self.apply(ap(e0, e2), e1)
+                                // self.apply(ap(e0, e2), e1)
+                                Ok(ap(ap(e0, e2), e1))
                             }
                             B => {
                                 // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
                                 // ap ap ap b inc dec x0   =   x0
-                                self.apply(e0, ap(e1, e2))
+                                // self.apply(e0, ap(e1, e2))
+                                Ok(ap(e0, ap(e1, e2)))
                             }
                             Cons => {
                                 // cons
                                 // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
-                                self.apply(ap(e2, e0), e1)
+                                // self.apply(ap(e2, e0), e1)
+                                Ok(ap(ap(e2, e0), e1))
                             }
                             _ => bail!("can not apply: ap ap ap"),
                         }
