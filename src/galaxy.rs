@@ -100,6 +100,7 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
                 x => {
                     if x.as_bytes()[0] == b':' {
                         let var_id: u64 = x[1..].parse()?;
+                        println!("parsed var_id: {}", var_id);
                         Expr::Var(var_id)
                     } else {
                         // TODO: Add context error message.
@@ -113,10 +114,10 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
     }
 }
 
-// struct InteractResult {
-//     new_state: Expr,
-//     images: Expr,
-// }
+struct InteractResult {
+    new_state: Expr,
+    images: Expr,
+}
 
 struct Galaxy {
     galaxy_id: u64,
@@ -154,6 +155,7 @@ impl Galaxy {
                 for line in lines.iter().take(lines.len() - 1) {
                     // println!("parse: line: {}", line);
                     let cap = re.captures(line).unwrap();
+                    println!("var: {}", &cap[1]);
                     vars.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?);
                     // println!("{}, {}", &cap[1], &cap[2]);
                 }
@@ -171,12 +173,10 @@ impl Galaxy {
     // }
 
     // fn interact(&mut self, state: Expr, event: Expr) -> Result<InteractResult> {
-    //     let expr = ap(ap(Expr::Var(self.galaxy_id), state), event);
-    //     let res = self.eval(expr)?;
-    //     println!("interact result: {:?}", res);
-
-    //     todo!();
-    // }
+    fn interact(&mut self, state: Expr, event: Expr) -> Result<Value> {
+        let expr = ap(ap(Expr::Var(self.galaxy_id), state), event);
+        self.eval(expr)
+    }
 
     fn eval_galaxy(&mut self) -> Result<Value> {
         self.eval_var(self.galaxy_id)
@@ -306,7 +306,8 @@ impl Galaxy {
                         // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                         // ap ap ap s add inc 1   =   3
 
-                        let new_var = Expr::Var(self.add_new_var(e2));
+                        // let new_var = Expr::Var(self.add_new_var(e2));
+                        let new_var = e2;
 
                         let ap_x0_x2 = ap(e0, new_var.clone());
                         let ap_x1_x2 = ap(e1, new_var);
@@ -515,32 +516,32 @@ mod tests {
     #[test]
     fn eval_galaxy_src_test() -> Result<()> {
         let src = ":1 = 2
-galaxy = :1
-";
+    galaxy = :1
+    ";
         assert_eq!(eval_galaxy_src(src)?, Value::Num(2));
 
         let src = ":1 = 2
-:2 = :1
-galaxy = :2
-";
+    :2 = :1
+    galaxy = :2
+    ";
         assert_eq!(eval_galaxy_src(src)?, Value::Num(2));
 
         let src = ":1 = 2
-:2 = ap inc :1
-galaxy = :2
-";
+    :2 = ap inc :1
+    galaxy = :2
+    ";
         assert_eq!(eval_galaxy_src(src)?, Value::Num(3));
 
         let src = ":1 = 2
-:2 = ap ap add 1 :1
-galaxy = :2
-";
+    :2 = ap ap add 1 :1
+    galaxy = :2
+    ";
         assert_eq!(eval_galaxy_src(src)?, Value::Num(3));
 
         let src = ":1 = ap add 1
-:2 = ap :1 2
-galaxy = :2
-";
+    :2 = ap :1 2
+    galaxy = :2
+    ";
         assert_eq!(eval_galaxy_src(src)?, Value::Num(3));
 
         Ok(())
@@ -551,15 +552,15 @@ galaxy = :2
         // From video part2
         // https://www.youtube.com/watch?v=oU4RAEQCTDE
         let src = ":1 = ap f :1
-:2 = ap :1 42
-galaxy = :2
-";
+    :2 = ap :1 42
+    galaxy = :2
+    ";
         assert_eq!(eval_galaxy_src(src)?, Value::Num(42));
 
         let src = ":1 = ap :1 1
-:2 = ap ap t 42 :1
-galaxy = :2
-";
+    :2 = ap ap t 42 :1
+    galaxy = :2
+    ";
         assert_eq!(eval_galaxy_src(src)?, Value::Num(42));
 
         Ok(())
@@ -582,13 +583,13 @@ galaxy = :2
         //          Ap(Add, Num(-1)))))
 
         let src = ":1141 = ap ap c b ap ap s ap ap b c ap ap b ap b b ap eq 0 ap ap b ap c :1141 ap add -1
-galaxy = :1141
-";
+    galaxy = :1141
+    ";
         let result = eval_galaxy_src(&src)?;
         // println!("1141 result: {:?}", result);
         assert_eq!(
-            format!("{:?}", result),
-            "PartialAp2(C, B, Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, B)), Ap(Eq, Num(0))))), Ap(Ap(B, Ap(C, Var(1141))), Ap(Add, Num(-1)))))");
+                format!("{:?}", result),
+                "PartialAp2(C, B, Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, B)), Ap(Eq, Num(0))))), Ap(Ap(B, Ap(C, Var(1141))), Ap(Add, Num(-1)))))");
         Ok(())
     }
 
@@ -604,6 +605,29 @@ galaxy = :1141
             format!("{:?}", result),
             "PartialAp2(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Var(1342))), Var(1328))), Var(1336))"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn interact_galaxy_test() -> Result<()> {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("task/galaxy.txt");
+        let src = std::fs::read_to_string(path)?.trim().to_string();
+
+        let mut galaxy = Galaxy::new(&src)?;
+        let res = galaxy.interact(Expr::Nil, ap(ap(Expr::Cons, Expr::Num(0)), Expr::Num(0)))?;
+        // galaxy interact result: PartialAp2(Cons, Num(0), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Cons)), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(C, Var(1144)), Num(1)))), Ap(Ap(C, Cons), Nil)), Var(410)), Var(429))), Ap(Var(1229), Var(429))))
+
+        // it is ap ap cons flag ap ap cons newState ap ap cons data nil
+
+        assert_eq!(
+            format!("{:?}", res),
+            "PartialAp2(Cons, Num(0), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Cons)), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(C, Var(1144)), Num(1)))), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(B, B), Isnil))), Ap(Ap(S, Ap(Ap(B, B), Cons)), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Cons)), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1141))), Ap(C, Var(1141))))), Num(1))))), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil)))))))), I), Nil), Var(1328)), Var(1336))), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(B, Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1204))), Var(1162)))), Ap(Ap(Ap(Ap(Var(1166), Ap(Neg, Num(3))), Ap(Neg, Num(3))), Num(7)), Num(7)))))), Ap(Ap(C, Add), Num(1)))))), I), Ap(Neg, Num(1))), Num(0)), Num(0)))), Ap(Var(1229), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(B, Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1204))), Var(1162)))), Ap(Ap(Ap(Ap(Var(1166), Ap(Neg, Num(3))), Ap(Neg, Num(3))), Num(7)), Num(7)))))), Ap(Ap(C, Add), Num(1)))))), I), Ap(Neg, Num(1))), Num(0)), Num(0)))))"
+        );
+
+        // Var(429)???
+
+        println!("galaxy interact result: {:?}", res);
         Ok(())
     }
 }
