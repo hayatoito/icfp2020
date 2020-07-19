@@ -48,6 +48,14 @@ pub enum Expr {
     Var(u64),
 }
 
+// Convenient functions
+fn ap(e0: Expr, e1: Expr) -> Expr {
+    Expr::Ap(Box::new(e0), Box::new(e1))
+}
+
+// const nil: Expr = Expr::Nil;
+// const t: Expr = Expr::Nil;
+
 #[derive(PartialEq, Clone, Debug)]
 pub enum Value {
     Num(i64),
@@ -61,10 +69,10 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
     let (current_token, tokens) = (tokens[0], &tokens[1..]);
     if current_token == "ap" {
         // TODO: parse overflows in debug build.
-        let ParseResult { exp: exp1, tokens } = parse(tokens)?;
-        let ParseResult { exp: exp2, tokens } = parse(tokens)?;
+        let ParseResult { exp: e0, tokens } = parse(tokens)?;
+        let ParseResult { exp: e1, tokens } = parse(tokens)?;
         Ok(ParseResult {
-            exp: Expr::Ap(Box::new(exp1), Box::new(exp2)),
+            exp: ap(e0, e1),
             tokens,
         })
     } else {
@@ -104,6 +112,11 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
         })
     }
 }
+
+// struct InteractResult {
+//     new_state: Expr,
+//     images: Expr,
+// }
 
 struct Galaxy {
     galaxy_id: u64,
@@ -149,6 +162,21 @@ impl Galaxy {
             cache: HashMap::new(),
         })
     }
+
+    // https://message-from-space.readthedocs.io/en/latest/implementation.html
+    // fn run(&mut self) {
+    //     // let state = Expr::Nil;
+    //     // let vector = (0, 0);
+    //     todo!();
+    // }
+
+    // fn interact(&mut self, state: Expr, event: Expr) -> Result<InteractResult> {
+    //     let expr = ap(ap(Expr::Var(self.galaxy_id), state), event);
+    //     let res = self.eval(expr)?;
+    //     println!("interact result: {:?}", res);
+
+    //     todo!();
+    // }
 
     fn eval_galaxy(&mut self) -> Result<Value> {
         self.eval_var(self.galaxy_id)
@@ -280,24 +308,24 @@ impl Galaxy {
 
                         let new_var = Expr::Var(self.add_new_var(e2));
 
-                        let ap_x0_x2 = Expr::Ap(Box::new(e0), Box::new(new_var.clone()));
-                        let ap_x1_x2 = Expr::Ap(Box::new(e1), Box::new(new_var));
+                        let ap_x0_x2 = ap(e0, new_var.clone());
+                        let ap_x1_x2 = ap(e1, new_var);
                         self.apply(ap_x0_x2, ap_x1_x2)
                     }
                     Expr::C => {
                         // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
                         // ap ap ap c add 1 2   =   3
-                        self.apply(Expr::Ap(Box::new(e0), Box::new(e2)), e1)
+                        self.apply(ap(e0, e2), e1)
                     }
                     Expr::B => {
                         // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
                         // ap ap ap b inc dec x0   =   x0
-                        self.apply(e0, Expr::Ap(Box::new(e1), Box::new(e2)))
+                        self.apply(e0, ap(e1, e2))
                     }
                     Expr::Cons => {
                         // cons
                         // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
-                        self.apply(Expr::Ap(Box::new(e2), Box::new(e0)), e1)
+                        self.apply(ap(e2, e0), e1)
                     }
                     _ => bail!("can not apply"),
                 }
@@ -364,17 +392,11 @@ mod tests {
         assert_eq!(parse_src("add")?, Expr::Add);
         assert_eq!(
             parse_src("ap ap add 1 2")?,
-            Expr::Ap(
-                Box::new(Expr::Ap(Box::new(Expr::Add), Box::new(Expr::Num(1)))),
-                Box::new(Expr::Num(2))
-            )
+            ap(ap(Expr::Add, Expr::Num(1)), Expr::Num(2))
         );
         assert_eq!(
             parse_src("ap ap eq 1 2")?,
-            Expr::Ap(
-                Box::new(Expr::Ap(Box::new(Expr::Eq), Box::new(Expr::Num(1)))),
-                Box::new(Expr::Num(2))
-            )
+            ap(ap(Expr::Eq, Expr::Num(1)), Expr::Num(2))
         );
         assert!(parse_src("add 1").is_err());
         Ok(())
