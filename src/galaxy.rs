@@ -221,7 +221,7 @@ impl Galaxy {
     fn add_new_var(&mut self, expr: Expr) -> u64 {
         self.max_var_id += 1;
         let new_id = self.max_var_id;
-        self.vars.insert(new_id, expr.into());
+        assert!(self.vars.insert(new_id, expr.into()).is_none());
         new_id
     }
 
