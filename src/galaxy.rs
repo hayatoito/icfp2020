@@ -114,7 +114,7 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
                 x => {
                     if x.as_bytes()[0] == b':' {
                         let var_id: u64 = x[1..].parse()?;
-                        println!("parsed var_id: {}", var_id);
+                        debug!("parsed var_id: {}", var_id);
                         Var(var_id)
                     } else {
                         // TODO: Add context error message.
@@ -136,6 +136,7 @@ struct InteractResult {
 struct Galaxy {
     galaxy_id: u64,
     vars: HashMap<u64, E>,
+    max_var_id: u64,
 }
 
 impl Galaxy {
@@ -147,17 +148,19 @@ impl Galaxy {
                 vars.insert(1, parse_src(src)?.into());
                 vars
             },
-            // cache: HashMap::new(),
+            max_var_id: 1,
         })
     }
 
     fn new(src: &str) -> Result<Galaxy> {
         let lines = src.trim().split('\n').collect::<Vec<_>>();
-        // println!("last line: {}", lines[lines.len() - 1]);
+        // debug!("last line: {}", lines[lines.len() - 1]);
         let galaxy_line_re = Regex::new(r"galaxy *= :*(\d+)$").unwrap();
         let cap = galaxy_line_re.captures(lines[lines.len() - 1]).unwrap();
         let galaxy_id: u64 = cap[1].parse()?;
-        // println!("galaxy_id: {}", galaxy_id);
+        // debug!("galaxy_id: {}", galaxy_id);
+
+        let mut max_var_id = 0;
 
         Ok(Galaxy {
             galaxy_id,
@@ -168,13 +171,15 @@ impl Galaxy {
                 for line in lines.iter().take(lines.len() - 1) {
                     // println!("parse: line: {}", line);
                     let cap = re.captures(line).unwrap();
-                    println!("var: {}", &cap[1]);
-                    vars.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?.into());
+                    debug!("var: {}", &cap[1]);
+                    let var_id = cap[1].parse::<u64>()?;
+                    max_var_id = max_var_id.max(var_id);
+                    vars.insert(var_id, parse_src(&cap[2])?.into());
                     // println!("{}, {}", &cap[1], &cap[2]);
                 }
                 vars
             },
-            // cache: HashMap::new(),
+            max_var_id,
         })
     }
 
@@ -196,18 +201,26 @@ impl Galaxy {
     }
 
     fn eval_var(&mut self, id: u64) -> Result<E> {
+        debug!("eval var: {}", id);
         let entry = self.vars[&id].clone();
         if entry.evaluated {
+            debug!("eval var: {} -> evaluated: {:?}", id, entry.expr);
             Ok(entry)
         } else {
+            debug!("eval var: {} -> toeval: {:?}", id, entry.expr);
             let res = self.eval(entry.expr)?;
-            self.vars.insert(id, res.clone());
+            debug!(
+                "eval var: {} <- evaluated? {} {:?}",
+                id, res.evaluated, res.expr
+            );
+            assert!(self.vars.insert(id, res.clone()).is_some());
             Ok(res)
         }
     }
 
     fn add_new_var(&mut self, expr: Expr) -> u64 {
-        let new_id = self.vars.len() as u64;
+        self.max_var_id += 1;
+        let new_id = self.max_var_id;
         self.vars.insert(new_id, expr.into());
         new_id
     }
@@ -215,12 +228,14 @@ impl Galaxy {
     fn eval(&mut self, e: impl Into<E>) -> Result<E> {
         let e: E = e.into();
         if e.evaluated {
+            debug!("eval: {:?} -> evaluated", e);
             Ok(e)
         } else {
+            debug!("eval: {:?} -> toeval", e);
             // TODO: Loop
-            println!("eval: {:?}", e);
+            debug!("eval: {:?}", e);
             let res = self.eval_internal(e.expr)?;
-            println!("eval result: {:?}", res);
+            debug!("eval result: {:?}", res);
             let mut res: E = res.into();
             res.evaluated = true;
             Ok(res)
@@ -238,7 +253,7 @@ impl Galaxy {
     fn apply(&mut self, f: impl Into<E>, x0: impl Into<E>) -> Result<Expr> {
         let f: E = f.into();
         let x0: E = x0.into();
-        println!("apply: f: {:?}, x0: {:?}", f, x0);
+        debug!("apply: f: {:?}, x0: {:?}", f, x0);
         let f = self.eval(f)?;
         match f.expr {
             Num(_) => bail!("can not apply: nuber"),
@@ -305,25 +320,30 @@ impl Galaxy {
                     S => Ok(ap(ap(S, e0), e1)),
                     C => Ok(ap(ap(C, e0), e1)),
                     B => Ok(ap(ap(B, e0), e1)),
-                    Cons => Ok(ap(ap(Cons, e0), e1)),
+                    // Cons => Ok(ap(ap(Cons, e0), e1)),
                     // Eval cons earger
-                    // Cons => Ok(Value::EvaledCons(
-                    //     Box::new(self.eval(e0)?),
-                    //     Box::new(self.eval(e1)?),
-                    // )),
+                    Cons => Ok(ap(ap(Cons, self.eval(e0)?), self.eval(e1)?)),
                     Ap(exp, e) => {
                         let (e0, e1, e2): (E, E, E) = (*e, e0, e1);
                         let f = self.eval(*exp)?;
                         match f.expr {
                             S => {
+                                debug!("expand s-combinator: {:?}", (&e0, &e1, &e2));
                                 // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                                 // ap ap ap s add inc 1   =   3
+                                let e2: E = {
+                                    if e2.evaluated {
+                                        debug!("s-combinator: e2 is already evaluated)");
+                                        e2
+                                    } else {
+                                        debug!("s-combinator: e2 is not evaluated");
+                                        Var(self.add_new_var(e2.expr)).into()
+                                    }
+                                };
+                                debug!("s-combinator: E2: {:?}", e2);
 
-                                // let new_var = Var(self.add_new_var(e2));
-                                let new_var = e2;
-
-                                let ap_x0_x2 = ap(e0, new_var.clone());
-                                let ap_x1_x2 = ap(e1, new_var);
+                                let ap_x0_x2 = ap(e0, e2.clone());
+                                let ap_x1_x2 = ap(e1, e2);
                                 self.apply(ap_x0_x2, ap_x1_x2)
                             }
                             C => {
@@ -634,7 +654,7 @@ mod tests {
 
         assert_eq!(
             format!("{:?}", res),
-            "Ap(Ap(Cons, Num(0)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Cons)), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(C, Var(1144)), Num(1)))), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(B, B), Isnil))), Ap(Ap(S, Ap(Ap(B, B), Cons)), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Cons)), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1141))), Ap(C, Var(1141))))), Num(1))))), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil)))))))), I), Nil), Var(1328)), Var(1336))), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(B, Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1204))), Var(1162)))), Ap(Ap(Ap(Ap(Var(1166), Ap(Neg, Num(3))), Ap(Neg, Num(3))), Num(7)), Num(7)))))), Ap(Ap(C, Add), Num(1)))))), I), Ap(Neg, Num(1))), Num(0)), Num(0)))), Ap(Var(1229), Ap(Ap(Ap(Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, C)), Ap(Ap(B, Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(B, Ap(B, Var(1204))), Var(1162)))), Ap(Ap(Ap(Ap(Var(1166), Ap(Neg, Num(3))), Ap(Neg, Num(3))), Num(7)), Num(7)))))), Ap(Ap(C, Add), Num(1)))))), I), Ap(Neg, Num(1))), Num(0)), Num(0)))))"
+            "Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Nil)), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil))))), Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(2)), Num(-2))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-2)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(3)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-3)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(3)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-3)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(2)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-2)), Num(2))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(3))), Nil))))))))))))))))))))), Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Num(-7)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-8)), Num(-2))), Nil))), Ap(Ap(Cons, Nil), Nil)))), Nil)))"
         );
 
         // Var(429)???
