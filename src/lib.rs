@@ -1,4 +1,5 @@
 pub mod galaxy;
+pub mod plot;
 mod prelude;
 
 pub use crate::prelude::Context;

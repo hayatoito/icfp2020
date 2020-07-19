@@ -382,8 +382,10 @@ dependencies = [
  "log",
  "regex",
  "reqwest",
+ "serde",
  "serde_json",
  "structopt",
+ "webbrowser",
 ]
 
 [[package]]
@@ -1283,6 +1285,22 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "webbrowser"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a83a4b8838569b89d2a3e7353995088e3b80c420a1269cd3d92ba8196875fc16"
+dependencies = [
+ "widestring",
+ "winapi 0.3.9",
+]
+
+[[package]]
+name = "widestring"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a763e303c0e0f23b0da40888724762e802a8ffefbc22de4127ef42493c2ea68c"
 
 [[package]]
 name = "winapi"

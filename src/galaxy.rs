@@ -1,3 +1,4 @@
+use crate::plot;
 use crate::prelude::*;
 pub use log::*;
 use std::convert::From;
@@ -128,15 +129,102 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
     }
 }
 
+#[derive(PartialEq, Clone, Debug)]
 struct InteractResult {
+    flag: Expr,
     new_state: Expr,
     images: Expr,
+}
+
+impl InteractResult {
+    fn new(expr: Expr) -> Result<InteractResult> {
+        let destruct = list_destruction(expr)?;
+        assert_eq!(destruct.len(), 3);
+        let mut iter = destruct.into_iter();
+        Ok(InteractResult {
+            flag: iter.next().unwrap(),
+            new_state: iter.next().unwrap(),
+            images: iter.next().unwrap(),
+        })
+    }
 }
 
 struct Galaxy {
     galaxy_id: u64,
     vars: HashMap<u64, E>,
     max_var_id: u64,
+}
+
+fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
+    fn internal(expr: Expr) -> Result<Vec<Expr>> {
+        // it is ap ap cons flag ap ap cons newState ap ap cons data nil
+
+        // List construction
+        // https://message-from-space.readthedocs.io/en/latest/message30.html
+
+        // ( x0 , x1 , x2 )   =   ap ap cons x0 ap ap cons x1 ap ap cons x2 nil
+        // ( flag , new_state , images )   =   ap ap cons x0 ap ap cons x1 ap ap cons x2 nil
+
+        // https://message-from-space.readthedocs.io/en/latest/message13.html
+        match expr {
+            Nil => Ok(Vec::new()),
+            // 1. [ap ap cons 1 nil]
+            // 2. [ap ap cons 1 ap ap cons 2 nil]
+            Ap(x0, x1) => match x0.expr {
+                // 1. ap [ap cons 1] [nil]
+                // 2. ap [ap cons 1 ap ap cons 2] [nil]
+                Ap(x0, x2) => match x0.expr {
+                    // 1. ap ap [cons] [1] [nil]
+                    // 2. ap ap [cons] [1] [ap ap cons 2 nil]
+                    Cons => {
+                        let mut post = internal(x1.expr)?;
+                        post.push(x2.expr);
+                        Ok(post)
+                    }
+                    _ => bail!("can not list destruction"),
+                },
+                _ => bail!("can not list destruction"),
+            },
+            _ => bail!("can not list destruction"),
+        }
+    }
+
+    let mut res = internal(expr)?;
+    res.reverse();
+    Ok(res)
+}
+
+// points: [Ap(Ap(Cons, Num(-1)), Num(-3)), Ap(Ap(Cons, Num(0)), Num(-3)), Ap(Ap(Cons, Num(1)), Num(-3)), Ap(Ap(Cons, Num(2)), Num(-2)), Ap(Ap(Cons, Num(-2)), Num(-1)), Ap(Ap(Cons, Num(-1)), Num(-1)), Ap(Ap(Cons, Num(0)), Num(-1)), Ap(Ap(Cons, Num(3)), Num(-1)), Ap(Ap(Cons, Num(-3)), Num(0)), Ap(Ap(Cons, Num(-1)), Num(0)), Ap(Ap(Cons, Num(1)), Num(0)), Ap(Ap(Cons, Num(3)), Num(0)), Ap(Ap(Cons, Num(-3)), Num(1)), Ap(Ap(Cons, Num(0)), Num(1)), Ap(Ap(Cons, Num(1)), Num(1)), Ap(Ap(Cons, Num(2)), Num(1)), Ap(Ap(Cons, Num(-2)), Num(2)), Ap(Ap(Cons, Num(-1)), Num(3)), Ap(Ap(Cons, Num(0)), Num(3)), Ap(Ap(Cons, Num(1)), Num(3)), Ap(Ap(Cons, Num(-7)), Num(-3)), Ap(Ap(Cons, Num(-8)), Num(-2))]
+
+fn images_to_points(images: Expr) -> Result<Vec<(i64, i64)>> {
+    let mut points = Vec::new();
+    for p in list_destruction(images)? {
+        for p in list_destruction(p)? {
+            // Ap(Ap(Cons, Num(-1)), Num(-3))
+            if let Ap(x, y) = p {
+                if let Ap(c, x) = x.expr {
+                    if let (Cons, Num(x), Num(y)) = (c.expr, x.expr, y.expr) {
+                        points.push((x, y));
+                    } else {
+                        bail!("can not parse point")
+                    }
+                } else {
+                    bail!("can not parse point")
+                }
+            } else {
+                bail!("can not parse point")
+            }
+        }
+    }
+    Ok(points)
+}
+
+fn print_images(images: Expr) -> Result<()> {
+    let points = images_to_points(images)?;
+    println!("points: {:?}", points);
+    plot::plot_galaxy(points)?;
+    Ok(())
+    // todo!()
 }
 
 impl Galaxy {
@@ -183,17 +271,34 @@ impl Galaxy {
         })
     }
 
-    // https://message-from-space.readthedocs.io/en/latest/implementation.html
-    // fn run(&mut self) {
-    //     // let state = Expr::Nil;
-    //     // let vector = (0, 0);
-    //     todo!();
-    // }
-
-    // fn interact(&mut self, state: Expr, event: Expr) -> Result<InteractResult> {
-    fn interact(&mut self, state: Expr, event: Expr) -> Result<E> {
+    fn interact_galaxy(&mut self, state: Expr, event: Expr) -> Result<Expr> {
         let expr = ap(ap(Expr::Var(self.galaxy_id), state), event);
-        self.eval(expr)
+        Ok(self.eval(expr)?.expr)
+    }
+
+    fn run(&mut self) -> Result<()> {
+        let mut state = Nil;
+
+        // TODO: loop
+        // TODO: get click event
+        let event = ap(ap(Cons, Num(0)), Num(0));
+
+        let (new_state, images) = self.interact(state, event)?;
+        print_images(images)?;
+        state = new_state;
+        Ok(())
+    }
+
+    fn interact(&mut self, state: Expr, event: Expr) -> Result<(Expr, Expr)> {
+        let expr = self.interact_galaxy(state, event)?;
+        let interact_result = InteractResult::new(expr)?;
+        if interact_result.flag == Num(0) {
+            Ok((interact_result.new_state, interact_result.images))
+        } else {
+            // https://message-from-space.readthedocs.io/en/latest/implementation.html
+            // Send_TO_ALIEN_PROXY
+            todo!()
+        }
     }
 
     fn eval_galaxy(&mut self) -> Result<E> {
@@ -232,8 +337,6 @@ impl Galaxy {
             Ok(e)
         } else {
             debug!("eval: {:?} -> toeval", e);
-            // TODO: Loop
-            debug!("eval: {:?}", e);
             let res = self.eval_internal(e.expr)?;
             debug!("eval result: {:?}", res);
             let mut res: E = res.into();
@@ -626,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    fn run_galaxy_test() -> Result<()> {
+    fn eval_galaxy_test() -> Result<()> {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("task/galaxy.txt");
         let src = std::fs::read_to_string(path)?.trim().to_string();
@@ -647,7 +750,7 @@ mod tests {
         let src = std::fs::read_to_string(path)?.trim().to_string();
 
         let mut galaxy = Galaxy::new(&src)?;
-        let res = galaxy.interact(Nil, ap(ap(Cons, Num(0)), Num(0)))?;
+        let res = galaxy.interact_galaxy(Nil, ap(ap(Cons, Num(0)), Num(0)))?;
         // galaxy interact result: PartialAp2(Cons, Num(0), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Cons)), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(C, Var(1144)), Num(1)))), Ap(Ap(C, Cons), Nil)), Var(410)), Var(429))), Ap(Var(1229), Var(429))))
 
         // it is ap ap cons flag ap ap cons newState ap ap cons data nil
@@ -657,9 +760,39 @@ mod tests {
             "Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Nil)), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil))))), Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(2)), Num(-2))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-2)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(3)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-3)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(3)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-3)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(2)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-2)), Num(2))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(3))), Nil))))))))))))))))))))), Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Num(-7)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-8)), Num(-2))), Nil))), Ap(Ap(Cons, Nil), Nil)))), Nil)))"
         );
 
-        // Var(429)???
-
         println!("galaxy interact result: {:?}", res);
+
+        let interact_result = InteractResult::new(res)?;
+        assert_eq!(interact_result.flag, Num(0));
+        // assert_eq!(list_destruction(interact_result.new_state)?, vec![Num(0)]);
+        Ok(())
+    }
+
+    #[test]
+    fn run_galaxy_test() -> Result<()> {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("task/galaxy.txt");
+        let src = std::fs::read_to_string(path)?.trim().to_string();
+        let mut galaxy = Galaxy::new(&src)?;
+        galaxy.run()
+    }
+
+    #[test]
+    fn list_destruction_test() -> Result<()> {
+        assert_eq!(list_destruction(Nil)?, Vec::new());
+        assert_eq!(
+            list_destruction(parse_src("ap ap cons 1 nil")?)?,
+            vec![Num(1)]
+        );
+        assert_eq!(
+            list_destruction(parse_src("ap ap cons 1 ap ap cons 2 nil")?)?,
+            vec![Num(1), Num(2)]
+        );
+        assert_eq!(
+            list_destruction(parse_src("ap ap cons 1 ap ap cons 2 ap ap cons 3 nil")?)?,
+            vec![Num(1), Num(2), Num(3)]
+        );
+
         Ok(())
     }
 }
