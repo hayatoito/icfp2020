@@ -163,49 +163,6 @@ struct Galaxy {
     max_var_id: u64,
 }
 
-// TODO: Avoid stackoverflow
-/*
-fn list_destruction_recursive(expr: Expr) -> Result<Vec<Expr>> {
-    fn internal(expr: Expr) -> Result<Vec<Expr>> {
-        // it is ap ap cons flag ap ap cons newState ap ap cons data nil
-
-        // List construction
-        // https://message-from-space.readthedocs.io/en/latest/message30.html
-
-        // ( x0 , x1 , x2 )   =   ap ap cons x0 ap ap cons x1 ap ap cons x2 nil
-        // ( flag , new_state , images )   =   ap ap cons x0 ap ap cons x1 ap ap cons x2 nil
-
-        // https://message-from-space.readthedocs.io/en/latest/message13.html
-        match expr {
-            Nil => Ok(Vec::new()),
-            // 1. [ap ap cons 1 nil]
-            // 2. [ap ap cons 1 ap ap cons 2 nil]
-            Ap(x0, x1) => match x0.expr {
-                // 1. ap [ap cons 1] [nil]
-                // 2. ap [ap cons 1 ap ap cons 2] [nil]
-                Ap(x0, x2) => match x0.expr {
-                    // 1. ap ap [cons] [1] [nil]
-                    // 2. ap ap [cons] [1] [ap ap cons 2 nil]
-                    Cons => {
-                        let mut post = internal(x1.expr)?;
-                        post.push(x2.expr);
-                        Ok(post)
-                    }
-                    _ => bail!("can not list destruction"),
-                },
-                _ => bail!("can not list destruction"),
-            },
-            _ => bail!("can not list destruction"),
-        }
-    }
-
-    let mut res = internal(expr)?;
-    res.reverse();
-    Ok(res)
-}
-*/
-
-// TODO: Avoid stackoverflow
 fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
     fn internal(expr: Expr) -> Result<Option<(Expr, Expr)>> {
         // it is ap ap cons flag ap ap cons newState ap ap cons data nil
@@ -376,6 +333,8 @@ impl Galaxy {
             (-4, 10),
             // many points -2 <= x <= 13, -4 <= y <=11
             (-2, -4),
+            // garaxy appeas
+            (0, 0),
         ];
 
         // for x in -2..13 {
@@ -426,7 +385,8 @@ impl Galaxy {
                 effective_clicks.push(click.clone());
 
                 if points != new_points {
-                    error!("click {:?} => screen is changed: {:?}", click, new_points);
+                    // error!("click {:?} => screen is changed: {:?}", click, new_points);
+                    error!("click {:?} => screen is changed", click);
                 }
                 if state != new_state {
                     warn!("click {:?} => new state: {:?}", click, new_state);

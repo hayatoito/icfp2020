@@ -1,3 +1,4 @@
+pub mod api;
 pub mod galaxy;
 pub mod plot;
 mod prelude;
