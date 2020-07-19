@@ -1,5 +1,6 @@
 use crate::prelude::*;
 pub use log::*;
+use std::convert::From;
 
 use regex::Regex;
 
@@ -24,8 +25,8 @@ struct ParseResult<'a> {
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum Expr {
+    Ap(Box<E>, Box<E>),
     Num(i64),
-    Ap(Box<Expr>, Box<Expr>),
     Add,
     Mul,
     Div,
@@ -48,19 +49,33 @@ pub enum Expr {
     Var(u64),
 }
 
+use Expr::*;
+
 // Convenient functions
-fn ap(e0: Expr, e1: Expr) -> Expr {
-    Expr::Ap(Box::new(e0), Box::new(e1))
+fn ap(e0: impl Into<E>, e1: impl Into<E>) -> Expr {
+    Ap(Box::new(e0.into()), Box::new(e1.into()))
 }
 
-// const nil: Expr = Expr::Nil;
-// const t: Expr = Expr::Nil;
+// #[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone)]
+pub struct E {
+    expr: Expr,
+    evaluated: bool,
+}
 
-#[derive(PartialEq, Clone, Debug)]
-pub enum Value {
-    Num(i64),
-    Func(Expr),
-    Ap(Expr, Expr),
+impl std::fmt::Debug for E {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.expr)
+    }
+}
+
+impl From<Expr> for E {
+    fn from(expr: Expr) -> Self {
+        E {
+            expr,
+            evaluated: false,
+        }
+    }
 }
 
 fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
@@ -77,34 +92,34 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
     } else {
         Ok(ParseResult {
             exp: match current_token {
-                "add" => Expr::Add,
-                "eq" => Expr::Eq,
-                "mul" => Expr::Mul,
-                "div" => Expr::Div,
-                "lt" => Expr::Lt,
-                "neg" => Expr::Neg,
-                "inc" => Expr::Inc,
-                "dec" => Expr::Dec,
-                "s" => Expr::S,
-                "c" => Expr::C,
-                "b" => Expr::B,
-                "t" => Expr::T,
-                "f" => Expr::F,
-                "i" => Expr::I,
-                "cons" => Expr::Cons,
-                "car" => Expr::Car,
-                "cdr" => Expr::Cdr,
-                "nil" => Expr::Nil,
-                "isnil" => Expr::Isnil,
+                "add" => Add,
+                "eq" => Eq,
+                "mul" => Mul,
+                "div" => Div,
+                "lt" => Lt,
+                "neg" => Neg,
+                "inc" => Inc,
+                "dec" => Dec,
+                "s" => S,
+                "c" => C,
+                "b" => B,
+                "t" => T,
+                "f" => F,
+                "i" => I,
+                "cons" => Cons,
+                "car" => Car,
+                "cdr" => Cdr,
+                "nil" => Nil,
+                "isnil" => Isnil,
                 x => {
                     if x.as_bytes()[0] == b':' {
                         let var_id: u64 = x[1..].parse()?;
                         println!("parsed var_id: {}", var_id);
-                        Expr::Var(var_id)
+                        Var(var_id)
                     } else {
                         // TODO: Add context error message.
                         let num: i64 = x.parse().context("number parse error")?;
-                        Expr::Num(num)
+                        Num(num)
                     }
                 }
             },
@@ -120,8 +135,7 @@ struct InteractResult {
 
 struct Galaxy {
     galaxy_id: u64,
-    vars: HashMap<u64, Expr>,
-    cache: HashMap<u64, Value>,
+    vars: HashMap<u64, E>,
 }
 
 impl Galaxy {
@@ -130,10 +144,10 @@ impl Galaxy {
             galaxy_id: 1,
             vars: {
                 let mut vars = HashMap::new();
-                vars.insert(1, parse_src(src)?);
+                vars.insert(1, parse_src(src)?.into());
                 vars
             },
-            cache: HashMap::new(),
+            // cache: HashMap::new(),
         })
     }
 
@@ -155,12 +169,12 @@ impl Galaxy {
                     // println!("parse: line: {}", line);
                     let cap = re.captures(line).unwrap();
                     println!("var: {}", &cap[1]);
-                    vars.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?);
+                    vars.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?.into());
                     // println!("{}, {}", &cap[1], &cap[2]);
                 }
                 vars
             },
-            cache: HashMap::new(),
+            // cache: HashMap::new(),
         })
     }
 
@@ -172,186 +186,182 @@ impl Galaxy {
     // }
 
     // fn interact(&mut self, state: Expr, event: Expr) -> Result<InteractResult> {
-    fn interact(&mut self, state: Expr, event: Expr) -> Result<Value> {
+    fn interact(&mut self, state: Expr, event: Expr) -> Result<E> {
         let expr = ap(ap(Expr::Var(self.galaxy_id), state), event);
         self.eval(expr)
     }
 
-    fn eval_galaxy(&mut self) -> Result<Value> {
+    fn eval_galaxy(&mut self) -> Result<E> {
         self.eval_var(self.galaxy_id)
     }
 
-    fn eval_var(&mut self, id: u64) -> Result<Value> {
-        if let Some(result) = self.cache.get(&id) {
-            Ok(result.clone())
+    fn eval_var(&mut self, id: u64) -> Result<E> {
+        let entry = self.vars[&id].clone();
+        if entry.evaluated {
+            Ok(entry)
         } else {
-            let result = self.eval(self.vars[&id].clone())?;
-            self.cache.insert(id, result.clone());
-            Ok(result)
+            let res = self.eval(entry.expr)?;
+            self.vars.insert(id, res.clone());
+            Ok(res)
         }
     }
 
     fn add_new_var(&mut self, expr: Expr) -> u64 {
         let new_id = self.vars.len() as u64;
-        self.vars.insert(new_id, expr);
+        self.vars.insert(new_id, expr.into());
         new_id
     }
 
-    fn eval(&mut self, exp: Expr) -> Result<Value> {
-        // println!("eval: {:?}", exp);
-        match exp {
-            Expr::Num(n) => Ok(Value::Num(n)),
-            Expr::Ap(left, right) => self.apply(*left, *right),
-            Expr::Add => Ok(Value::Func(Expr::Add)),
-            Expr::Mul => Ok(Value::Func(Expr::Mul)),
-            Expr::Div => Ok(Value::Func(Expr::Div)),
-            Expr::Eq => Ok(Value::Func(Expr::Eq)),
-            Expr::Lt => Ok(Value::Func(Expr::Lt)),
-            Expr::Neg => Ok(Value::Func(Expr::Neg)),
-            Expr::Inc => Ok(Value::Func(Expr::Inc)),
-            Expr::Dec => Ok(Value::Func(Expr::Dec)),
-            Expr::S => Ok(Value::Func(Expr::S)),
-            Expr::C => Ok(Value::Func(Expr::C)),
-            Expr::B => Ok(Value::Func(Expr::B)),
-            Expr::T => Ok(Value::Func(Expr::T)),
-            Expr::F => Ok(Value::Func(Expr::F)),
-            Expr::I => Ok(Value::Func(Expr::I)),
-            Expr::Cons => Ok(Value::Func(Expr::Cons)),
-            Expr::Car => Ok(Value::Func(Expr::Car)),
-            Expr::Cdr => Ok(Value::Func(Expr::Cdr)),
-            Expr::Nil => Ok(Value::Func(Expr::Nil)),
-            Expr::Isnil => Ok(Value::Func(Expr::Isnil)),
-            Expr::Var(n) => self.eval_var(n),
+    fn eval(&mut self, e: impl Into<E>) -> Result<E> {
+        let e: E = e.into();
+        if e.evaluated {
+            Ok(e)
+        } else {
+            // TODO: Loop
+            println!("eval: {:?}", e);
+            let res = self.eval_internal(e.expr)?;
+            println!("eval result: {:?}", res);
+            let mut res: E = res.into();
+            res.evaluated = true;
+            Ok(res)
         }
     }
 
-    fn apply(&mut self, f: Expr, x0: Expr) -> Result<Value> {
-        debug!("apply: f: {:?}, x0: {:?}", f, x0);
+    fn eval_internal(&mut self, e: Expr) -> Result<Expr> {
+        match e {
+            Ap(left, right) => self.apply(*left, *right),
+            Var(n) => Ok(self.eval_var(n)?.expr),
+            x => Ok(x),
+        }
+    }
+
+    fn apply(&mut self, f: impl Into<E>, x0: impl Into<E>) -> Result<Expr> {
+        let f: E = f.into();
+        let x0: E = x0.into();
+        println!("apply: f: {:?}, x0: {:?}", f, x0);
         let f = self.eval(f)?;
-        match f {
-            Value::Num(_) => bail!("can not apply"),
-            Value::Func(exp) => match exp {
-                Expr::Neg => match self.eval(x0)? {
-                    Value::Num(n) => Ok(Value::Num(-n)),
-                    _ => bail!("can not apply"),
-                },
-                Expr::Inc => match self.eval(x0)? {
-                    Value::Num(n) => Ok(Value::Num(n + 1)),
-                    _ => bail!("can not apply"),
-                },
-                Expr::Dec => match self.eval(x0)? {
-                    Value::Num(n) => Ok(Value::Num(n - 1)),
-                    _ => bail!("can not apply"),
-                },
-                Expr::I => self.eval(x0),
-                // ap car x2 = ap x2 t
-                Expr::Car => self.apply(x0, Expr::T),
-                Expr::Cdr => self.apply(x0, Expr::F),
-                Expr::Nil => Ok(Value::Func(Expr::T)),
-                Expr::Isnil => match self.eval(x0)? {
-                    Value::Func(Expr::Nil) => Ok(Value::Func(Expr::T)),
-                    _ => Ok(Value::Func(Expr::F)),
-                },
-                exp => Ok(Value::Ap(exp, x0)),
+        match f.expr {
+            Num(_) => bail!("can not apply: nuber"),
+            Neg => match self.eval(x0)?.expr {
+                Num(n) => Ok(Num(-n)),
+                _ => bail!("can not apply: neg"),
             },
-            Value::Ap(exp, e0) => {
-                let (e0, e1) = (e0, x0); // For readability.
-                let f = self.eval(exp)?;
-                match f {
-                    Value::Func(exp) => match exp {
-                        Expr::Add => match (self.eval(e0)?, self.eval(e1)?) {
-                            (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 + n1)),
-                            _ => bail!("can not apply"),
-                        },
-                        Expr::Mul => match (self.eval(e0)?, self.eval(e1)?) {
-                            (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 * n1)),
-                            _ => bail!("can not apply"),
-                        },
-                        Expr::Div => match (self.eval(e0)?, self.eval(e1)?) {
-                            (Value::Num(n0), Value::Num(n1)) => Ok(Value::Num(n0 / n1)),
-                            _ => bail!("can not apply"),
-                        },
-                        Expr::Eq => match (self.eval(e0)?, self.eval(e1)?) {
-                            (Value::Num(n0), Value::Num(n1)) => {
-                                if n0 == n1 {
-                                    Ok(Value::Func(Expr::T))
-                                } else {
-                                    Ok(Value::Func(Expr::F))
-                                }
-                            }
-                            _ => bail!("can not apply"),
-                        },
-                        Expr::Lt => match (self.eval(e0)?, self.eval(e1)?) {
-                            (Value::Num(n0), Value::Num(n1)) => {
-                                if n0 < n1 {
-                                    Ok(Value::Func(Expr::T))
-                                } else {
-                                    Ok(Value::Func(Expr::F))
-                                }
-                            }
-                            _ => bail!("can not apply"),
-                        },
-                        Expr::T => self.eval(e0),
-                        Expr::F => self.eval(e1),
-                        Expr::S => Ok(Value::Ap(ap(Expr::S, e0), e1)),
-                        Expr::C => Ok(Value::Ap(ap(Expr::C, e0), e1)),
-                        Expr::B => Ok(Value::Ap(ap(Expr::B, e0), e1)),
-                        Expr::Cons => Ok(Value::Ap(ap(Expr::Cons, e0), e1)),
-                        exp => bail!("can not apply: exp: {:?}, e0: {:?}, e1: {:?}", exp, e0, e1),
+            Inc => match self.eval(x0)?.expr {
+                Num(n) => Ok(Num(n + 1)),
+                _ => bail!("can not apply: inc"),
+            },
+            Dec => match self.eval(x0)?.expr {
+                Num(n) => Ok(Num(n - 1)),
+                _ => bail!("can not apply: dec"),
+            },
+            I => Ok(self.eval(x0)?.expr),
+            // ap car x2 = ap x2 t
+            Car => self.apply(x0, T),
+            Cdr => self.apply(x0, F),
+            Nil => Ok(T),
+            Isnil => match self.eval(x0)?.expr {
+                Nil => Ok(T),
+                _ => Ok(F),
+            },
+            Ap(exp, e0) => {
+                let (e0, e1): (E, E) = (*e0, x0); // For readability.
+                let f = self.eval(*exp)?;
+                match f.expr {
+                    Add => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
+                        (Num(n0), Num(n1)) => Ok(Num(n0 + n1)),
+                        _ => bail!("can not apply: add"),
                     },
-                    Value::Ap(exp, e) => {
-                        let (e0, e1, e2) = (e, e0, e1);
-                        let f = self.eval(exp)?;
-                        match f {
-                            Value::Func(exp) => match exp {
-                                Expr::S => {
-                                    // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
-                                    // ap ap ap s add inc 1   =   3
+                    Mul => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
+                        (Num(n0), Num(n1)) => Ok(Num(n0 * n1)),
+                        // _ => bail!("can not apply: mul"),
+                        (x, y) => bail!("can not apply: mul: e0: {:?}, e1: {:?}", x, y),
+                    },
+                    Div => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
+                        (Num(n0), Num(n1)) => Ok(Num(n0 / n1)),
+                        _ => bail!("can not apply: div"),
+                    },
+                    Eq => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
+                        (Num(n0), Num(n1)) => {
+                            if n0 == n1 {
+                                Ok(T)
+                            } else {
+                                Ok(F)
+                            }
+                        }
+                        _ => bail!("can not apply: eq"),
+                    },
+                    Lt => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
+                        (Num(n0), Num(n1)) => {
+                            if n0 < n1 {
+                                Ok(T)
+                            } else {
+                                Ok(F)
+                            }
+                        }
+                        _ => bail!("can not apply: lt"),
+                    },
+                    T => Ok(self.eval(e0)?.expr),
+                    F => Ok(self.eval(e1)?.expr),
+                    S => Ok(ap(ap(S, e0), e1)),
+                    C => Ok(ap(ap(C, e0), e1)),
+                    B => Ok(ap(ap(B, e0), e1)),
+                    Cons => Ok(ap(ap(Cons, e0), e1)),
+                    // Eval cons earger
+                    // Cons => Ok(Value::EvaledCons(
+                    //     Box::new(self.eval(e0)?),
+                    //     Box::new(self.eval(e1)?),
+                    // )),
+                    Ap(exp, e) => {
+                        let (e0, e1, e2): (E, E, E) = (*e, e0, e1);
+                        let f = self.eval(*exp)?;
+                        match f.expr {
+                            S => {
+                                // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
+                                // ap ap ap s add inc 1   =   3
 
-                                    // let new_var = Expr::Var(self.add_new_var(e2));
-                                    let new_var = e2;
+                                // let new_var = Var(self.add_new_var(e2));
+                                let new_var = e2;
 
-                                    let ap_x0_x2 = ap(e0, new_var.clone());
-                                    let ap_x1_x2 = ap(e1, new_var);
-                                    self.apply(ap_x0_x2, ap_x1_x2)
-                                }
-                                Expr::C => {
-                                    // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
-                                    // ap ap ap c add 1 2   =   3
-                                    self.apply(ap(e0, e2), e1)
-                                }
-                                Expr::B => {
-                                    // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
-                                    // ap ap ap b inc dec x0   =   x0
-                                    self.apply(e0, ap(e1, e2))
-                                }
-                                Expr::Cons => {
-                                    // cons
-                                    // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
-                                    self.apply(ap(e2, e0), e1)
-                                }
-                                _ => bail!("can not apply"),
-                            },
-                            _ => bail!("can not apply"),
+                                let ap_x0_x2 = ap(e0, new_var.clone());
+                                let ap_x1_x2 = ap(e1, new_var);
+                                self.apply(ap_x0_x2, ap_x1_x2)
+                            }
+                            C => {
+                                // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
+                                // ap ap ap c add 1 2   =   3
+                                self.apply(ap(e0, e2), e1)
+                            }
+                            B => {
+                                // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
+                                // ap ap ap b inc dec x0   =   x0
+                                self.apply(e0, ap(e1, e2))
+                            }
+                            Cons => {
+                                // cons
+                                // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
+                                self.apply(ap(e2, e0), e1)
+                            }
+                            _ => bail!("can not apply: ap ap ap"),
                         }
                     }
-                    _ => bail!("can not apply"),
+                    _ => bail!("can not apply: ap ap"),
                 }
             }
+            f => Ok(ap(f, x0)),
         }
     }
 }
 
-pub fn eval_src(src: &str) -> Result<Value> {
+pub fn eval_src(src: &str) -> Result<Expr> {
     // let exp = parse_src(src)?;
     // eval(exp)
     let mut galaxy = Galaxy::new_for_test(src)?;
-    galaxy.eval_galaxy()
+    galaxy.eval_galaxy().map(|e| e.expr)
 }
 
-pub fn eval_galaxy_src(src: &str) -> Result<Value> {
+pub fn eval_galaxy_src(src: &str) -> Result<Expr> {
     let mut galaxy = Galaxy::new(src)?;
-    galaxy.eval_galaxy()
+    galaxy.eval_galaxy().map(|e| e.expr)
 }
 
 // fn send(s: &str) -> String {
@@ -365,6 +375,7 @@ mod tests {
     use chrono::Local;
     use std::io::Write as _;
 
+    #[allow(dead_code)]
     fn init_env_logger() {
         let _ = env_logger::builder()
             .format(|buf, record| {
@@ -395,52 +406,43 @@ mod tests {
 
     #[test]
     fn parse_test() -> Result<()> {
-        assert_eq!(parse_src("1")?, Expr::Num(1));
-        assert_eq!(parse_src("add")?, Expr::Add);
-        assert_eq!(
-            parse_src("ap ap add 1 2")?,
-            ap(ap(Expr::Add, Expr::Num(1)), Expr::Num(2))
-        );
-        assert_eq!(
-            parse_src("ap ap eq 1 2")?,
-            ap(ap(Expr::Eq, Expr::Num(1)), Expr::Num(2))
-        );
+        assert_eq!(parse_src("1")?, Num(1));
+        assert_eq!(parse_src("add")?, Add);
+        assert_eq!(parse_src("ap ap add 1 2")?, ap(ap(Add, Num(1)), Num(2)));
+        assert_eq!(parse_src("ap ap eq 1 2")?, ap(ap(Eq, Num(1)), Num(2)));
         assert!(parse_src("add 1").is_err());
         Ok(())
     }
 
     #[test]
     fn eval_test() -> Result<()> {
-        let t = Value::Func(Expr::T);
-        let f = Value::Func(Expr::F);
-
         // add
-        assert_eq!(eval_src("ap ap add 1 2")?, Value::Num(3));
-        assert_eq!(eval_src("ap ap add 3 ap ap add 1 2")?, Value::Num(6));
+        assert_eq!(eval_src("ap ap add 1 2")?, Num(3));
+        assert_eq!(eval_src("ap ap add 3 ap ap add 1 2")?, Num(6));
 
         // eq
-        assert_eq!(eval_src("ap ap eq 1 1")?, t);
-        assert_eq!(eval_src("ap ap eq 1 2")?, f);
+        assert_eq!(eval_src("ap ap eq 1 1")?, T);
+        assert_eq!(eval_src("ap ap eq 1 2")?, F);
 
         // mul
-        assert_eq!(eval_src("ap ap mul 2 4")?, Value::Num(8));
-        assert_eq!(eval_src("ap ap add 3 ap ap mul 2 4")?, Value::Num(11));
+        assert_eq!(eval_src("ap ap mul 2 4")?, Num(8));
+        assert_eq!(eval_src("ap ap add 3 ap ap mul 2 4")?, Num(11));
 
         // div
-        assert_eq!(eval_src("ap ap div 4 2")?, Value::Num(2));
-        assert_eq!(eval_src("ap ap div 4 3")?, Value::Num(1));
-        assert_eq!(eval_src("ap ap div 4 4")?, Value::Num(1));
-        assert_eq!(eval_src("ap ap div 4 5")?, Value::Num(0));
-        assert_eq!(eval_src("ap ap div 5 2")?, Value::Num(2));
-        assert_eq!(eval_src("ap ap div 6 -2")?, Value::Num(-3));
-        assert_eq!(eval_src("ap ap div 5 -3")?, Value::Num(-1));
-        assert_eq!(eval_src("ap ap div -5 3")?, Value::Num(-1));
-        assert_eq!(eval_src("ap ap div -5 -3")?, Value::Num(1));
+        assert_eq!(eval_src("ap ap div 4 2")?, Num(2));
+        assert_eq!(eval_src("ap ap div 4 3")?, Num(1));
+        assert_eq!(eval_src("ap ap div 4 4")?, Num(1));
+        assert_eq!(eval_src("ap ap div 4 5")?, Num(0));
+        assert_eq!(eval_src("ap ap div 5 2")?, Num(2));
+        assert_eq!(eval_src("ap ap div 6 -2")?, Num(-3));
+        assert_eq!(eval_src("ap ap div 5 -3")?, Num(-1));
+        assert_eq!(eval_src("ap ap div -5 3")?, Num(-1));
+        assert_eq!(eval_src("ap ap div -5 -3")?, Num(1));
 
         // lt
-        assert_eq!(eval_src("ap ap lt 0 -1")?, f);
-        assert_eq!(eval_src("ap ap lt 0 0")?, f);
-        assert_eq!(eval_src("ap ap lt 0 1")?, t);
+        assert_eq!(eval_src("ap ap lt 0 -1")?, F);
+        assert_eq!(eval_src("ap ap lt 0 0")?, F);
+        assert_eq!(eval_src("ap ap lt 0 1")?, T);
 
         Ok(())
     }
@@ -448,53 +450,57 @@ mod tests {
     #[test]
     fn eval_unary_test() -> Result<()> {
         // neg
-        assert_eq!(eval_src("ap neg 0")?, Value::Num(0));
-        assert_eq!(eval_src("ap neg 1")?, Value::Num(-1));
-        assert_eq!(eval_src("ap neg -1")?, Value::Num(1));
-        assert_eq!(eval_src("ap ap add ap neg 1 2")?, Value::Num(1));
+        assert_eq!(eval_src("ap neg 0")?, Num(0));
+        assert_eq!(eval_src("ap neg 1")?, Num(-1));
+        assert_eq!(eval_src("ap neg -1")?, Num(1));
+        assert_eq!(eval_src("ap ap add ap neg 1 2")?, Num(1));
 
         // inc
-        assert_eq!(eval_src("ap inc 0")?, Value::Num(1));
-        assert_eq!(eval_src("ap inc 1")?, Value::Num(2));
+        assert_eq!(eval_src("ap inc 0")?, Num(1));
+        assert_eq!(eval_src("ap inc 1")?, Num(2));
 
         // dec
-        assert_eq!(eval_src("ap dec 0")?, Value::Num(-1));
-        assert_eq!(eval_src("ap dec 1")?, Value::Num(0));
+        assert_eq!(eval_src("ap dec 0")?, Num(-1));
+        assert_eq!(eval_src("ap dec 1")?, Num(0));
 
         Ok(())
     }
 
     #[test]
-    fn eval_combinator_test() -> Result<()> {
+    fn eval_s_c_b_test() -> Result<()> {
         // s
-        // assert_eq!(eval_src("ap ap ap s add inc 1", EvalResult::Num(3));  // inc is not implemented yet.
-        assert_eq!(eval_src("ap ap ap s mul ap add 1 6")?, Value::Num(42));
+        assert_eq!(eval_src("ap ap ap s add inc 1")?, Num(3));
+        assert_eq!(eval_src("ap ap ap s mul ap add 1 6")?, Num(42));
 
         // c
-        assert_eq!(eval_src("ap ap ap c add 1 2")?, Value::Num(3));
+        assert_eq!(eval_src("ap ap ap c add 1 2")?, Num(3));
 
         // b
         // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
         // ap ap ap b inc dec x0   =   x0
-        assert_eq!(eval_src("ap ap ap b neg neg 1")?, Value::Num(1));
+        assert_eq!(eval_src("ap ap ap b neg neg 1")?, Num(1));
+        Ok(())
+    }
 
+    #[test]
+    fn eval_t_f_i_test() -> Result<()> {
         // t
         // ap ap t x0 x1   =   x0
         // ap ap t 1 5   =   1
         // ap ap t t i   =   t
         // ap ap t t ap inc 5   =   t
         // ap ap t ap inc 5 t   =   6
-        assert_eq!(eval_src("ap ap t 1 5")?, Value::Num(1));
-        assert_eq!(eval_src("ap ap t t 1")?, Value::Func(Expr::T));
-        assert_eq!(eval_src("ap ap t t ap inc 5")?, Value::Func(Expr::T));
-        assert_eq!(eval_src("ap ap t ap inc 5 t")?, Value::Num(6));
+        assert_eq!(eval_src("ap ap t 1 5")?, Num(1));
+        assert_eq!(eval_src("ap ap t t 1")?, T);
+        assert_eq!(eval_src("ap ap t t ap inc 5")?, T);
+        assert_eq!(eval_src("ap ap t ap inc 5 t")?, Num(6));
 
         // f
-        assert_eq!(eval_src("ap ap f 1 2")?, Value::Num(2));
+        assert_eq!(eval_src("ap ap f 1 2")?, Num(2));
 
         // i
-        assert_eq!(eval_src("ap i 0")?, Value::Num(0));
-        assert_eq!(eval_src("ap i i")?, Value::Func(Expr::I));
+        assert_eq!(eval_src("ap i 0")?, Num(0));
+        assert_eq!(eval_src("ap i i")?, I);
 
         Ok(())
     }
@@ -505,16 +511,16 @@ mod tests {
         // car
         // ap car ap ap cons x0 x1   =   x0
         // ap car x2   =   ap x2 t
-        assert_eq!(eval_src("ap car ap ap cons 0 1")?, Value::Num(0));
-        assert_eq!(eval_src("ap cdr ap ap cons 0 1")?, Value::Num(1));
+        assert_eq!(eval_src("ap car ap ap cons 0 1")?, Num(0));
+        assert_eq!(eval_src("ap cdr ap ap cons 0 1")?, Num(1));
 
         // nil
         // ap nil x0   =   t
-        assert_eq!(eval_src("ap nil 1")?, Value::Func(Expr::T));
+        assert_eq!(eval_src("ap nil 1")?, T);
 
         // isnil
-        assert_eq!(eval_src("ap isnil nil")?, Value::Func(Expr::T));
-        assert_eq!(eval_src("ap isnil 1")?, Value::Func(Expr::F));
+        assert_eq!(eval_src("ap isnil nil")?, T);
+        assert_eq!(eval_src("ap isnil 1")?, F);
 
         Ok(())
     }
@@ -524,31 +530,31 @@ mod tests {
         let src = ":1 = 2
     galaxy = :1
     ";
-        assert_eq!(eval_galaxy_src(src)?, Value::Num(2));
+        assert_eq!(eval_galaxy_src(src)?, Num(2));
 
         let src = ":1 = 2
     :2 = :1
     galaxy = :2
     ";
-        assert_eq!(eval_galaxy_src(src)?, Value::Num(2));
+        assert_eq!(eval_galaxy_src(src)?, Num(2));
 
         let src = ":1 = 2
     :2 = ap inc :1
     galaxy = :2
     ";
-        assert_eq!(eval_galaxy_src(src)?, Value::Num(3));
+        assert_eq!(eval_galaxy_src(src)?, Num(3));
 
         let src = ":1 = 2
     :2 = ap ap add 1 :1
     galaxy = :2
     ";
-        assert_eq!(eval_galaxy_src(src)?, Value::Num(3));
+        assert_eq!(eval_galaxy_src(src)?, Num(3));
 
         let src = ":1 = ap add 1
     :2 = ap :1 2
     galaxy = :2
     ";
-        assert_eq!(eval_galaxy_src(src)?, Value::Num(3));
+        assert_eq!(eval_galaxy_src(src)?, Num(3));
 
         Ok(())
     }
@@ -561,20 +567,20 @@ mod tests {
     :2 = ap :1 42
     galaxy = :2
     ";
-        assert_eq!(eval_galaxy_src(src)?, Value::Num(42));
+        assert_eq!(eval_galaxy_src(src)?, Num(42));
 
         let src = ":1 = ap :1 1
     :2 = ap ap t 42 :1
     galaxy = :2
     ";
-        assert_eq!(eval_galaxy_src(src)?, Value::Num(42));
+        assert_eq!(eval_galaxy_src(src)?, Num(42));
 
         Ok(())
     }
 
     #[test]
     fn eval_recursive_func_1141_test() -> Result<()> {
-        init_env_logger();
+        // init_env_logger();
 
         // :1141 = ap ap c b ap ap s ap ap b c ap ap b ap b b ap eq 0 ap ap b ap c :1141 ap add -1
 
@@ -621,7 +627,7 @@ mod tests {
         let src = std::fs::read_to_string(path)?.trim().to_string();
 
         let mut galaxy = Galaxy::new(&src)?;
-        let res = galaxy.interact(Expr::Nil, ap(ap(Expr::Cons, Expr::Num(0)), Expr::Num(0)))?;
+        let res = galaxy.interact(Nil, ap(ap(Cons, Num(0)), Num(0)))?;
         // galaxy interact result: PartialAp2(Cons, Num(0), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Cons)), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(C, Var(1144)), Num(1)))), Ap(Ap(C, Cons), Nil)), Var(410)), Var(429))), Ap(Var(1229), Var(429))))
 
         // it is ap ap cons flag ap ap cons newState ap ap cons data nil
