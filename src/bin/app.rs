@@ -1,8 +1,8 @@
+use chrono::Local;
 use icfp2020::api;
 use icfp2020::galaxy;
 use icfp2020::{Context as _, Result};
 use std::io::Write as _;
-use std::path::PathBuf;
 use structopt::StructOpt;
 
 fn parse_i32_with_context(s: &str) -> Result<i32> {

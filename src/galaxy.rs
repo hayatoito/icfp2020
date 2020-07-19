@@ -200,13 +200,9 @@ fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
 
     let mut expr = expr;
     let mut list = Vec::new();
-    loop {
-        if let Some((x, xs)) = internal(expr)? {
-            list.push(x);
-            expr = xs;
-        } else {
-            break;
-        }
+    while let Some((x, xs)) = internal(expr)? {
+        list.push(x);
+        expr = xs;
     }
     Ok(list)
 }
@@ -236,12 +232,75 @@ fn images_to_points(images: Expr) -> Result<Vec<(i64, i64)>> {
     Ok(points)
 }
 
-fn print_images(images: Expr) -> Result<()> {
-    let points = images_to_points(images)?;
-    info!("points: {:?}", points);
-    // plot::plot_galaxy(points)?;
-    Ok(())
-    // todo!()
+fn cons_car_cdr(e: Expr) -> Result<(Expr, Expr)> {
+    if let Ap(a, cdr) = e {
+        if let Ap(b, car) = a.expr {
+            ensure!(b.expr == Cons, "invalid modulator: not cons");
+            return Ok((car.expr, cdr.expr));
+        }
+    }
+    bail!("invalid modular")
+}
+
+// TODO: Avoid stackoverlow?
+fn modulate_expr(e: Expr) -> Result<String> {
+    match e {
+        Nil => Ok("00".to_string()),
+        Num(n) => Ok(modulate_num(n)),
+        e => {
+            let (car, cdr) = cons_car_cdr(e)?;
+            let mut modulated = "11".to_string();
+            modulated.push_str(&modulate_expr(car)?);
+            modulated.push_str(&modulate_expr(cdr)?);
+            Ok(modulated)
+        }
+    }
+}
+
+fn modulate_num(n: i64) -> String {
+    let mut modulated = String::new();
+    if n == 0 {
+        return "010".to_string();
+    }
+    if n >= 0 {
+        modulated.push_str("01");
+    } else {
+        modulated.push_str("10");
+    }
+
+    let prefix = [
+        "10",
+        "110",
+        "1110",
+        "11110",
+        "111110",
+        "1111110",
+        "11111110",
+        "111111110",
+        "1111111110",
+        "11111111110",
+        "111111111110",
+        "1111111111110",
+        "11111111111110",
+        "111111111111110",
+        "1111111111111110",
+        "11111111111111110",
+    ];
+
+    assert_eq!(prefix.len(), 16);
+
+    let n: u128 = (n as i128).abs() as u128;
+
+    for (i, prefix) in prefix.iter().enumerate() {
+        let bits = (i + 1) * 4;
+        if n < ((1 as u128) << bits) {
+            modulated.push_str(prefix);
+            let binary = format!("{:b}", n);
+            modulated.push_str(&format!("{:0>width$}", binary, width = bits));
+            break;
+        }
+    }
+    modulated
 }
 
 impl Galaxy {
@@ -267,23 +326,25 @@ impl Galaxy {
 
         let mut max_var_id = 0;
 
+        let vars = {
+            let mut vars = HashMap::new();
+            let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
+
+            for line in lines.iter().take(lines.len() - 1) {
+                // println!("parse: line: {}", line);
+                let cap = re.captures(line).unwrap();
+                debug!("var: {}", &cap[1]);
+                let var_id = cap[1].parse::<u64>()?;
+                max_var_id = max_var_id.max(var_id);
+                vars.insert(var_id, parse_src(&cap[2])?.into());
+                // println!("{}, {}", &cap[1], &cap[2]);
+            }
+            vars
+        };
+
         Ok(Galaxy {
             galaxy_id,
-            vars: {
-                let mut vars = HashMap::new();
-                let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
-
-                for line in lines.iter().take(lines.len() - 1) {
-                    // println!("parse: line: {}", line);
-                    let cap = re.captures(line).unwrap();
-                    debug!("var: {}", &cap[1]);
-                    let var_id = cap[1].parse::<u64>()?;
-                    max_var_id = max_var_id.max(var_id);
-                    vars.insert(var_id, parse_src(&cap[2])?.into());
-                    // println!("{}, {}", &cap[1], &cap[2]);
-                }
-                vars
-            },
+            vars,
             max_var_id,
         })
     }
@@ -293,6 +354,7 @@ impl Galaxy {
         Ok(self.eval(expr)?.expr)
     }
 
+    #[allow(dead_code)]
     fn get_next_event(&self) -> Result<(i64, i64)> {
         loop {
             let mut input = String::new();
@@ -311,7 +373,7 @@ impl Galaxy {
     }
 
     fn run(&mut self) -> Result<()> {
-        let mut click_events = vec![
+        let click_events = vec![
             // 8 times clicks at (0, 0)
             (0, 0),
             (0, 0),
@@ -337,45 +399,41 @@ impl Galaxy {
             (0, 0),
         ];
 
-        // for x in -2..13 {
-        //     for y in -4..11 {
-        //         click_events.push((x, y));
-        //     }
-        // }
-        // for _ in 0..10000 {
-        //     events.push((0, 0));
-        // }
-
-        // let mut visited = std::collections::HashSet::new();
-        // let mut queue = std::collections::VecDeque::new();
-
-        // for event in &events {
-        //     queue.push_back(event.clone());
-        //     visited.insert(event);
-        // }
         let mut state = Nil;
-
-        // let mut got_points = std::collections::HashSet::new();
 
         let mut points = HashSet::new();
 
         let mut effective_clicks = Vec::new();
 
-        // while let Some(event) = queue.pop_front() {
         for click in click_events {
             // let event = self.get_next_event()?;
-            trace!("click: {:?}", click);
-            trace!("state: {:?}", state);
-            let (x, y) = click.clone();
+            info!("click: {:?}", click);
+            // trace!("state: {:?}", state);
+            let (x, y) = click;
             let event = ap(ap(Cons, Num(x)), Num(y));
 
-            // let (new_state, images) = self.interact(state.clone(), event)?;
             let InteractResult {
                 flag,
                 new_state,
                 images,
             } = self.interact(state.clone(), event)?;
 
+            if flag != Num(0) {
+                error!("Need to send alien, break later");
+                error!("data: {:?}", images);
+                let modulated = modulate_expr(images)?;
+                error!("modulated: {:?}", modulated);
+
+                // TODO: Send modulated to alien.
+
+                effective_clicks.push(click);
+                break;
+            }
+
+            // TODO: Fails
+            // Ap(Ap(Cons, Num(0)), Nil)
+
+            info!("images: {:?}", images);
             let new_points = images_to_points(images)?
                 .into_iter()
                 .collect::<HashSet<_>>();
@@ -395,11 +453,6 @@ impl Galaxy {
             }
             points = new_points;
             state = new_state;
-
-            if flag != Num(0) {
-                error!("Need to send alien, breaking");
-                break;
-            }
         }
 
         // info!("points: {:?}", got_points);
@@ -920,6 +973,47 @@ mod tests {
         assert_eq!(
             list_destruction(parse_src("ap ap cons 1 ap ap cons 2 ap ap cons 3 nil")?)?,
             vec![Num(1), Num(2), Num(3)]
+        );
+
+        // Ap(Ap(Cons, Num(0)), Nil)
+
+        assert_eq!(
+            list_destruction(parse_src("ap ap cons 0 nil")?)?,
+            vec![Num(0)]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn modulate_num_test() {
+        assert_eq!(modulate_num(0), "010");
+        assert_eq!(modulate_num(1), "01100001");
+        assert_eq!(modulate_num(2), "01100010");
+        assert_eq!(modulate_num(15), "01101111");
+        assert_eq!(modulate_num(16), "0111000010000");
+        assert_eq!(modulate_num(255), "0111011111111");
+        assert_eq!(modulate_num(256), "011110000100000000");
+        assert_eq!(modulate_num(-1), "10100001");
+        assert_eq!(modulate_num(-2), "10100010");
+    }
+
+    #[test]
+    fn modulate_expr_test() -> Result<()> {
+        assert_eq!(modulate_expr(parse_src("nil")?)?, "00");
+
+        assert_eq!(modulate_expr(parse_src("ap ap cons nil nil")?)?, "110000");
+
+        assert_eq!(modulate_expr(parse_src("ap ap cons 0 nil")?)?, "1101000");
+
+        assert_eq!(
+            modulate_expr(parse_src("ap ap cons 1 2")?)?,
+            "110110000101100010"
+        );
+
+        assert_eq!(
+            modulate_expr(parse_src("ap ap cons 1 ap ap cons 2 nil")?)?,
+            "1101100001110110001000"
         );
 
         Ok(())
