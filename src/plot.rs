@@ -50,7 +50,7 @@ where
 {
     let mut path = std::env::temp_dir();
     path.push(&format!("plot-{}.html", unique_file_name()));
-    println!("plot: {}", path.display());
+    debug!("plot: {}", path.display());
     write_html(&path, data)?;
     webbrowser::open(path.to_str().unwrap())?;
     // Ok(path)

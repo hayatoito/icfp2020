@@ -149,13 +149,23 @@ impl InteractResult {
     }
 }
 
+pub fn run() -> Result<()> {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("task/galaxy.txt");
+    let src = std::fs::read_to_string(path)?.trim().to_string();
+    let mut galaxy = Galaxy::new(&src)?;
+    galaxy.run()
+}
+
 struct Galaxy {
     galaxy_id: u64,
     vars: HashMap<u64, E>,
     max_var_id: u64,
 }
 
-fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
+// TODO: Avoid stackoverflow
+/*
+fn list_destruction_recursive(expr: Expr) -> Result<Vec<Expr>> {
     fn internal(expr: Expr) -> Result<Vec<Expr>> {
         // it is ap ap cons flag ap ap cons newState ap ap cons data nil
 
@@ -193,6 +203,56 @@ fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
     res.reverse();
     Ok(res)
 }
+*/
+
+// TODO: Avoid stackoverflow
+fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
+    fn internal(expr: Expr) -> Result<Option<(Expr, Expr)>> {
+        // it is ap ap cons flag ap ap cons newState ap ap cons data nil
+
+        // List construction
+        // https://message-from-space.readthedocs.io/en/latest/message30.html
+
+        // ( x0 , x1 , x2 )   =   ap ap cons x0 ap ap cons x1 ap ap cons x2 nil
+        // ( flag , new_state , images )   =   ap ap cons x0 ap ap cons x1 ap ap cons x2 nil
+
+        // https://message-from-space.readthedocs.io/en/latest/message13.html
+        match expr {
+            Nil => Ok(None),
+            // 1. [ap ap cons 1 nil]
+            // 2. [ap ap cons 1 ap ap cons 2 nil]
+            Ap(x0, x1) => match x0.expr {
+                // 1. ap [ap cons 1] [nil]
+                // 2. ap [ap cons 1 ap ap cons 2] [nil]
+                Ap(x0, x2) => match x0.expr {
+                    // 1. ap ap [cons] [1] [nil]
+                    // 2. ap ap [cons] [1] [ap ap cons 2 nil]
+                    Cons => {
+                        Ok(Some((x2.expr, x1.expr)))
+                        // let mut post = internal(x1.expr)?;
+                        // post.push(x2.expr);
+                        // Ok(post)
+                    }
+                    _ => bail!("can not list destruction"),
+                },
+                _ => bail!("can not list destruction"),
+            },
+            _ => bail!("can not list destruction"),
+        }
+    }
+
+    let mut expr = expr;
+    let mut list = Vec::new();
+    loop {
+        if let Some((x, xs)) = internal(expr)? {
+            list.push(x);
+            expr = xs;
+        } else {
+            break;
+        }
+    }
+    Ok(list)
+}
 
 // points: [Ap(Ap(Cons, Num(-1)), Num(-3)), Ap(Ap(Cons, Num(0)), Num(-3)), Ap(Ap(Cons, Num(1)), Num(-3)), Ap(Ap(Cons, Num(2)), Num(-2)), Ap(Ap(Cons, Num(-2)), Num(-1)), Ap(Ap(Cons, Num(-1)), Num(-1)), Ap(Ap(Cons, Num(0)), Num(-1)), Ap(Ap(Cons, Num(3)), Num(-1)), Ap(Ap(Cons, Num(-3)), Num(0)), Ap(Ap(Cons, Num(-1)), Num(0)), Ap(Ap(Cons, Num(1)), Num(0)), Ap(Ap(Cons, Num(3)), Num(0)), Ap(Ap(Cons, Num(-3)), Num(1)), Ap(Ap(Cons, Num(0)), Num(1)), Ap(Ap(Cons, Num(1)), Num(1)), Ap(Ap(Cons, Num(2)), Num(1)), Ap(Ap(Cons, Num(-2)), Num(2)), Ap(Ap(Cons, Num(-1)), Num(3)), Ap(Ap(Cons, Num(0)), Num(3)), Ap(Ap(Cons, Num(1)), Num(3)), Ap(Ap(Cons, Num(-7)), Num(-3)), Ap(Ap(Cons, Num(-8)), Num(-2))]
 
@@ -221,8 +281,8 @@ fn images_to_points(images: Expr) -> Result<Vec<(i64, i64)>> {
 
 fn print_images(images: Expr) -> Result<()> {
     let points = images_to_points(images)?;
-    println!("points: {:?}", points);
-    plot::plot_galaxy(points)?;
+    info!("points: {:?}", points);
+    // plot::plot_galaxy(points)?;
     Ok(())
     // todo!()
 }
@@ -276,25 +336,120 @@ impl Galaxy {
         Ok(self.eval(expr)?.expr)
     }
 
+    fn get_next_event(&self) -> Result<(i64, i64)> {
+        loop {
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let args = input.trim().split_whitespace().collect::<Vec<_>>();
+            if args.len() < 2 {
+                error!("invalid args: len < 2");
+            }
+            if let Ok(x) = args[0].parse::<i64>() {
+                if let Ok(y) = args[1].parse::<i64>() {
+                    return Ok((x, y));
+                }
+            }
+            error!("invalid line");
+        }
+    }
+
     fn run(&mut self) -> Result<()> {
+        let mut click_events = vec![
+            // 8 times clicks at (0, 0)
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            // click crosshair
+            (8, 4),
+            (2, -8),
+            (3, 6),
+            (0, -14),
+            (-4, 10),
+            // many points 2 <= x <= 17, -7 <= y <= 8
+            (9, -3),
+            // many points -12 <= x <= 3, 0 <= y <=15
+            (-4, 10),
+            // many points -2 <= x <= 13, -4 <= y <=11
+        ];
+
+        for x in -2..13 {
+            for y in -4..11 {
+                click_events.push((x, y));
+            }
+        }
+        // for _ in 0..10000 {
+        //     events.push((0, 0));
+        // }
+
+        // let mut visited = std::collections::HashSet::new();
+        // let mut queue = std::collections::VecDeque::new();
+
+        // for event in &events {
+        //     queue.push_back(event.clone());
+        //     visited.insert(event);
+        // }
         let mut state = Nil;
 
-        // TODO: loop
-        // TODO: get click event
-        let event = ap(ap(Cons, Num(0)), Num(0));
+        // let mut got_points = std::collections::HashSet::new();
 
-        let (new_state, images) = self.interact(state, event)?;
-        print_images(images)?;
-        state = new_state;
+        let mut points = HashSet::new();
+
+        let mut effective_clicks = Vec::new();
+
+        // while let Some(event) = queue.pop_front() {
+        for click in click_events {
+            // let event = self.get_next_event()?;
+            trace!("click: {:?}", click);
+            trace!("state: {:?}", state);
+            let (x, y) = click.clone();
+            let event = ap(ap(Cons, Num(x)), Num(y));
+
+            let (new_state, images) = self.interact(state.clone(), event)?;
+
+            // print_images(images)?;
+            let new_points = images_to_points(images)?
+                .into_iter()
+                .collect::<HashSet<_>>();
+            trace!("new_points: {:?}", new_points);
+
+            if points != new_points || state != new_state {
+                effective_clicks.push(click.clone());
+
+                if points != new_points {
+                    error!("click {:?} => screen is changed: {:?}", click, new_points);
+                }
+                if state != new_state {
+                    warn!("click {:?} => new state: {:?}", click, new_state);
+                }
+                // plot::plot_galaxy(new_points.iter().cloned().collect())?;
+            }
+
+            points = new_points;
+            state = new_state;
+        }
+
+        // info!("points: {:?}", got_points);
+        // plot::plot_galaxy(got_points.into_iter().collect())?;
+
+        error!("effective_clicks: {:?}", effective_clicks);
+        plot::plot_galaxy(points.iter().cloned().collect())?;
         Ok(())
     }
 
     fn interact(&mut self, state: Expr, event: Expr) -> Result<(Expr, Expr)> {
+        debug!("> interact");
         let expr = self.interact_galaxy(state, event)?;
         let interact_result = InteractResult::new(expr)?;
         if interact_result.flag == Num(0) {
+            debug!("< interact");
             Ok((interact_result.new_state, interact_result.images))
         } else {
+            error!("flag is not zero: {:?}", interact_result.flag);
             // https://message-from-space.readthedocs.io/en/latest/implementation.html
             // Send_TO_ALIEN_PROXY
             todo!()
@@ -306,17 +461,19 @@ impl Galaxy {
     }
 
     fn eval_var(&mut self, id: u64) -> Result<E> {
-        debug!("eval var: {}", id);
+        trace!("eval var: {}", id);
         let entry = self.vars[&id].clone();
         if entry.evaluated {
-            debug!("eval var: {} -> evaluated: {:?}", id, entry.expr);
+            trace!("eval var: {} -> evaluated: {:?}", id, entry.expr);
             Ok(entry)
         } else {
-            debug!("eval var: {} -> toeval: {:?}", id, entry.expr);
+            trace!("eval var: {} -> toeval: {:?}", id, entry.expr);
             let res = self.eval(entry.expr)?;
-            debug!(
+            trace!(
                 "eval var: {} <- evaluated? {} {:?}",
-                id, res.evaluated, res.expr
+                id,
+                res.evaluated,
+                res.expr
             );
             assert!(self.vars.insert(id, res.clone()).is_some());
             Ok(res)
@@ -333,12 +490,12 @@ impl Galaxy {
     fn eval(&mut self, e: impl Into<E>) -> Result<E> {
         let e: E = e.into();
         if e.evaluated {
-            debug!("eval: {:?} -> evaluated", e);
+            trace!("eval: {:?} -> evaluated", e);
             Ok(e)
         } else {
-            debug!("eval: {:?} -> toeval", e);
+            trace!("eval: {:?} -> toeval", e);
             let res = self.eval_internal(e.expr)?;
-            debug!("eval result: {:?}", res);
+            trace!("eval result: {:?}", res);
             let mut res: E = res.into();
             res.evaluated = true;
             Ok(res)
@@ -356,7 +513,7 @@ impl Galaxy {
     fn apply(&mut self, f: impl Into<E>, x0: impl Into<E>) -> Result<Expr> {
         let f: E = f.into();
         let x0: E = x0.into();
-        debug!("apply: f: {:?}, x0: {:?}", f, x0);
+        trace!("apply: f: {:?}, x0: {:?}", f, x0);
         let f = self.eval(f)?;
         match f.expr {
             Num(_) => bail!("can not apply: nuber"),
@@ -431,19 +588,19 @@ impl Galaxy {
                         let f = self.eval(*exp)?;
                         match f.expr {
                             S => {
-                                debug!("expand s-combinator: {:?}", (&e0, &e1, &e2));
+                                trace!("expand s-combinator: {:?}", (&e0, &e1, &e2));
                                 // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                                 // ap ap ap s add inc 1   =   3
                                 let e2: E = {
                                     if e2.evaluated {
-                                        debug!("s-combinator: e2 is already evaluated)");
+                                        trace!("s-combinator: e2 is already evaluated)");
                                         e2
                                     } else {
-                                        debug!("s-combinator: e2 is not evaluated");
+                                        trace!("s-combinator: e2 is not evaluated");
                                         Var(self.add_new_var(e2.expr)).into()
                                     }
                                 };
-                                debug!("s-combinator: E2: {:?}", e2);
+                                trace!("s-combin!ator: E2: {:?}", e2);
 
                                 let ap_x0_x2 = ap(e0, e2.clone());
                                 let ap_x1_x2 = ap(e1, e2);
@@ -769,12 +926,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn run_galaxy_test() -> Result<()> {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("task/galaxy.txt");
-        let src = std::fs::read_to_string(path)?.trim().to_string();
-        let mut galaxy = Galaxy::new(&src)?;
-        galaxy.run()
+        run()
     }
 
     #[test]

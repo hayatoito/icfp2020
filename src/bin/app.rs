@@ -1,3 +1,4 @@
+use icfp2020::galaxy;
 use icfp2020::{Context as _, Result};
 use reqwest::StatusCode;
 
@@ -37,8 +38,12 @@ enum Command {
         #[structopt(name = "arg")]
         arg: String,
     },
-    #[structopt(name = "test")]
-    Test,
+    /// api test
+    #[structopt(name = "api")]
+    Api,
+    /// Interact with galaxy
+    #[structopt(name = "interact")]
+    Interact,
 }
 
 #[allow(dead_code)]
@@ -109,7 +114,7 @@ fn apikey() -> Result<String> {
     Ok(std::fs::read_to_string(path)?.trim().to_string())
 }
 
-fn test() -> Result<()> {
+fn api() -> Result<()> {
     let server_url = "https://icfpc2020-api.testkontur.ru";
     let apikey = apikey()?;
 
@@ -141,9 +146,8 @@ fn main() -> Result<()> {
             println!("Hello {}", arg);
             assert_eq!(parse_i32_with_context("1")?, 1);
         }
-        Command::Test => {
-            test()?;
-        }
+        Command::Api => api()?,
+        Command::Interact => galaxy::run()?,
     }
     Ok(())
 }
