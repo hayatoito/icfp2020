@@ -107,26 +107,21 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
 
 struct Galaxy {
     galaxy_id: u64,
-    functions: HashMap<u64, Expr>,
-    results: HashMap<u64, Value>,
+    vars: HashMap<u64, Expr>,
+    cache: HashMap<u64, Value>,
 }
 
 impl Galaxy {
     fn new_for_test(src: &str) -> Result<Galaxy> {
-        let exp = parse_src(src)?;
         Ok(Galaxy {
             galaxy_id: 1,
-            functions: {
-                let mut map = HashMap::new();
-                map.insert(1, exp);
-                map
+            vars: {
+                let mut vars = HashMap::new();
+                vars.insert(1, parse_src(src)?);
+                vars
             },
-            results: HashMap::new(),
+            cache: HashMap::new(),
         })
-    }
-
-    fn eval_galaxy(&mut self) -> Result<Value> {
-        self.eval(self.functions[&self.galaxy_id].clone())
     }
 
     fn new(src: &str) -> Result<Galaxy> {
@@ -139,20 +134,40 @@ impl Galaxy {
 
         Ok(Galaxy {
             galaxy_id,
-            functions: {
-                let mut map = HashMap::new();
+            vars: {
+                let mut vars = HashMap::new();
                 let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
 
                 for line in lines.iter().take(lines.len() - 1) {
                     // println!("parse: line: {}", line);
                     let cap = re.captures(line).unwrap();
-                    map.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?);
+                    vars.insert(cap[1].parse::<u64>()?, parse_src(&cap[2])?);
                     // println!("{}, {}", &cap[1], &cap[2]);
                 }
-                map
+                vars
             },
-            results: HashMap::new(),
+            cache: HashMap::new(),
         })
+    }
+
+    fn eval_galaxy(&mut self) -> Result<Value> {
+        self.eval_var(self.galaxy_id)
+    }
+
+    fn eval_var(&mut self, id: u64) -> Result<Value> {
+        if let Some(result) = self.cache.get(&id) {
+            Ok(result.clone())
+        } else {
+            let result = self.eval(self.vars[&id].clone())?;
+            self.cache.insert(id, result.clone());
+            Ok(result)
+        }
+    }
+
+    fn add_new_var(&mut self, expr: Expr) -> u64 {
+        let new_id = self.vars.len() as u64;
+        self.vars.insert(new_id, expr);
+        new_id
     }
 
     fn eval(&mut self, exp: Expr) -> Result<Value> {
@@ -180,16 +195,6 @@ impl Galaxy {
             Expr::Nil => Ok(Value::Func(Expr::Nil)),
             Expr::Isnil => Ok(Value::Func(Expr::Isnil)),
             Expr::Var(n) => self.eval_var(n),
-        }
-    }
-
-    fn eval_var(&mut self, variable_id: u64) -> Result<Value> {
-        if let Some(result) = self.results.get(&variable_id) {
-            Ok(result.clone())
-        } else {
-            let result = self.eval(self.functions[&variable_id].clone())?;
-            self.results.insert(variable_id, result.clone());
-            Ok(result)
         }
     }
 
@@ -273,9 +278,10 @@ impl Galaxy {
                         // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                         // ap ap ap s add inc 1   =   3
 
-                        // TODO: Avoid clone. Use Rc?
-                        let ap_x0_x2 = Expr::Ap(Box::new(e0), Box::new(e2.clone()));
-                        let ap_x1_x2 = Expr::Ap(Box::new(e1), Box::new(e2));
+                        let new_var = Expr::Var(self.add_new_var(e2));
+
+                        let ap_x0_x2 = Expr::Ap(Box::new(e0), Box::new(new_var.clone()));
+                        let ap_x1_x2 = Expr::Ap(Box::new(e1), Box::new(new_var));
                         self.apply(ap_x0_x2, ap_x1_x2)
                     }
                     Expr::C => {
@@ -556,8 +562,11 @@ galaxy = :2
         let src = ":1141 = ap ap c b ap ap s ap ap b c ap ap b ap b b ap eq 0 ap ap b ap c :1141 ap add -1
 galaxy = :1141
 ";
-        println!("1141 result: {:?}", eval_galaxy_src(&src));
-        // 1141 result: Ok(PartialAp2(C, B, Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, B)), Ap(Eq, Num(0))))), Ap(Ap(B, Ap(C, Var(1141))), Ap(Add, Num(-1))))))
+        let result = eval_galaxy_src(&src)?;
+        // println!("1141 result: {:?}", result);
+        assert_eq!(
+            format!("{:?}", result),
+            "PartialAp2(C, B, Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, B)), Ap(Eq, Num(0))))), Ap(Ap(B, Ap(C, Var(1141))), Ap(Add, Num(-1)))))");
         Ok(())
     }
 
@@ -566,8 +575,13 @@ galaxy = :1141
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("task/galaxy.txt");
         let src = std::fs::read_to_string(path)?.trim().to_string();
-        println!("galaxy result: {:?}", eval_galaxy_src(&src));
-        // [2020-07-19 Sun] galaxy result: Ok(PartialAp2(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Var(1342))), Var(1328))), Var(1336)))
+
+        let result = eval_galaxy_src(&src)?;
+        // println!("galaxy result: {:?}", result);
+        assert_eq!(
+            format!("{:?}", result),
+            "PartialAp2(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Var(1342))), Var(1328))), Var(1336))"
+        );
         Ok(())
     }
 }
