@@ -375,13 +375,14 @@ impl Galaxy {
             // many points -12 <= x <= 3, 0 <= y <=15
             (-4, 10),
             // many points -2 <= x <= 13, -4 <= y <=11
+            (-2, -4),
         ];
 
-        for x in -2..13 {
-            for y in -4..11 {
-                click_events.push((x, y));
-            }
-        }
+        // for x in -2..13 {
+        //     for y in -4..11 {
+        //         click_events.push((x, y));
+        //     }
+        // }
         // for _ in 0..10000 {
         //     events.push((0, 0));
         // }
@@ -409,9 +410,13 @@ impl Galaxy {
             let (x, y) = click.clone();
             let event = ap(ap(Cons, Num(x)), Num(y));
 
-            let (new_state, images) = self.interact(state.clone(), event)?;
+            // let (new_state, images) = self.interact(state.clone(), event)?;
+            let InteractResult {
+                flag,
+                new_state,
+                images,
+            } = self.interact(state.clone(), event)?;
 
-            // print_images(images)?;
             let new_points = images_to_points(images)?
                 .into_iter()
                 .collect::<HashSet<_>>();
@@ -428,9 +433,13 @@ impl Galaxy {
                 }
                 // plot::plot_galaxy(new_points.iter().cloned().collect())?;
             }
-
             points = new_points;
             state = new_state;
+
+            if flag != Num(0) {
+                error!("Need to send alien, breaking");
+                break;
+            }
         }
 
         // info!("points: {:?}", got_points);
@@ -441,19 +450,10 @@ impl Galaxy {
         Ok(())
     }
 
-    fn interact(&mut self, state: Expr, event: Expr) -> Result<(Expr, Expr)> {
+    fn interact(&mut self, state: Expr, event: Expr) -> Result<InteractResult> {
         debug!("> interact");
         let expr = self.interact_galaxy(state, event)?;
-        let interact_result = InteractResult::new(expr)?;
-        if interact_result.flag == Num(0) {
-            debug!("< interact");
-            Ok((interact_result.new_state, interact_result.images))
-        } else {
-            error!("flag is not zero: {:?}", interact_result.flag);
-            // https://message-from-space.readthedocs.io/en/latest/implementation.html
-            // Send_TO_ALIEN_PROXY
-            todo!()
-        }
+        InteractResult::new(expr)
     }
 
     fn eval_galaxy(&mut self) -> Result<E> {
