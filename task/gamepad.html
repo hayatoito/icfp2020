@@ -55,10 +55,39 @@
     canvas.height = (ymax - ymin) * scale;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const visited = new Map();
 
     for (xy of points) {
       const x = xy[0] - xmin;
       const y = xy[1] - ymin;
+
+      const key = x + "," + y;
+      let c = visited.get(key) || 0;
+      c += 1;
+      visited.set(key, c);
+    }
+
+    for (let [xy, c] of visited) {
+      let sep = xy.indexOf(",");
+      let x = parseInt(xy.substring(0, sep));
+      let y = parseInt(xy.substring(sep + 1));
+
+      let color;
+      if (c == 1) {
+        color = 'gray';
+      } else if (c == 2) {
+        color = 'white';
+      } else if (c == 3) {
+        color = 'yellow';
+      } else if (c == 4) {
+        color = 'green';
+      } else {
+        color = 'red';
+      }
+      ctx.fillStyle = color;
       ctx.fillRect(x * scale, y * scale, size, size);
     }
   }
