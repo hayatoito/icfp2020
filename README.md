@@ -27,7 +27,7 @@ Team `hayatox`'s repository for
    make interact
    ```
 
-   This runs `cargo cargo run --release --bin app interact` with some configutations.
+   This runs `cargo run --release --bin app interact` with some configutations.
    See [`Makefile`](./Makefile) for the detail.
 
 3. Open `http://localhost:9999/gamepad.html` in your browser. You should see the following galaxy map.
