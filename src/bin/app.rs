@@ -1,24 +1,10 @@
 use chrono::Local;
 use icfp2020::api;
 use icfp2020::galaxy;
-use icfp2020::{Context as _, Result};
+use icfp2020::interact;
+use icfp2020::Result;
 use std::io::Write as _;
 use structopt::StructOpt;
-
-fn parse_i32_with_context(s: &str) -> Result<i32> {
-    s.parse().with_context(|| format!("can not parse: {}", s))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn main_test_dummy() {
-        assert_eq!(0, 0);
-        assert_eq!(parse_i32_with_context("1").unwrap(), 1);
-    }
-}
 
 #[derive(StructOpt, Debug)]
 struct Cli {
@@ -31,17 +17,12 @@ struct Cli {
 
 #[derive(StructOpt, Debug)]
 enum Command {
-    #[structopt(name = "hello")]
-    Hello {
-        #[structopt(name = "arg")]
-        arg: String,
-    },
     /// api test
     #[structopt(name = "api")]
     Api,
-    /// Interact with galaxy
+    /// Interact with galaxy with browser UI
     #[structopt(name = "interact")]
-    Interact,
+    Interact { port: Option<u16> },
     #[structopt(name = "bench")]
     Bench,
 }
@@ -65,8 +46,6 @@ fn env_logger_verbose_init() {
 }
 
 fn main() -> Result<()> {
-    println!("Hello, world!");
-
     let args = Cli::from_args();
     if args.verbose > 0 {
         env_logger_verbose_init();
@@ -81,13 +60,12 @@ fn main() -> Result<()> {
     log::trace!("trace");
 
     match args.cmd {
-        Command::Hello { arg } => {
-            println!("Hello {}", arg);
-            assert_eq!(parse_i32_with_context("1")?, 1);
-        }
         Command::Api => api::test()?,
-        Command::Interact => galaxy::run()?,
         Command::Bench => galaxy::bench()?,
+        Command::Interact { port } => {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(interact::interact(port.unwrap_or(9999)))?;
+        }
     }
     Ok(())
 }

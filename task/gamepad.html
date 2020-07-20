@@ -1,0 +1,85 @@
+
+<!DOCTYPE html>
+<head>
+</head>
+<canvas id="canvas"></div>
+<script>
+  const scale = 5;
+  const size = scale;
+
+  const canvas = document.getElementById('canvas');
+  console.log('canvas', canvas);
+
+  const ctx = canvas.getContext("2d");
+  console.log('ctx', ctx);
+
+  let xmin = 0;
+  let ymin = 0;
+
+  let points = [];
+
+  (async () => {
+    await fetch_data();
+  })();
+
+  function array_equal(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; ++i) {
+      if (a[i][0] !== b[i][0] || a[i][1] !== b[i][1]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function fetch_data() {
+    const response = await fetch('/screen');
+    let new_points = await response.json();
+
+    if (array_equal(points, new_points)) {
+      return;
+    }
+    points = new_points;
+    console.log('points', points);
+
+    const xs = points.map(p => p[0]);
+    const ys = points.map(p => p[1]);
+
+    xmin = Math.min(...xs);
+    ymin = Math.min(...ys);
+
+    const xmax = Math.max(...xs);
+    const ymax = Math.max(...ys);
+
+    canvas.width = (xmax - xmin) * scale;
+    canvas.height = (ymax - ymin) * scale;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (xy of points) {
+      const x = xy[0] - xmin;
+      const y = xy[1] - ymin;
+      ctx.fillRect(x * scale, y * scale, size, size);
+    }
+  }
+
+  canvas.addEventListener('click', (event) => {
+    console.log('click', event);
+
+    let sx = event.x - canvas.offsetLeft;
+    let sy = event.y - canvas.offsetTop;
+
+    let rx = Math.floor(sx / scale) + xmin;
+    let ry = Math.floor(sy / scale) + ymin;
+
+    console.log(rx, ry);
+    fetch('/click/' + rx + '/' + ry);
+  });
+
+  window.setInterval(() => {
+    (async () => {
+      await fetch_data();
+    })();
+  }, 1000);
+
+</script>

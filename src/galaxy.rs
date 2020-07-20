@@ -1,5 +1,4 @@
 use crate::api;
-use crate::plot;
 use crate::prelude::*;
 pub use log::*;
 use std::convert::From;
@@ -130,32 +129,6 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
     }
 }
 
-enum UserInput {
-    Click(i64, i64),
-    End,
-}
-
-fn get_user_input() -> Result<UserInput> {
-    loop {
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        if input == "end" {
-            return Ok(UserInput::End);
-        } else {
-            let args = input.trim().split_whitespace().collect::<Vec<_>>();
-            if args.len() < 2 {
-                error!("invalid args: len < 2");
-            }
-            if let Ok(x) = args[0].parse::<i64>() {
-                if let Ok(y) = args[1].parse::<i64>() {
-                    return Ok(UserInput::Click(x, y));
-                }
-            }
-            error!("invalid input");
-        }
-    }
-}
-
 #[derive(PartialEq, Clone, Debug)]
 struct InteractResult {
     flag: Expr,
@@ -176,26 +149,12 @@ impl InteractResult {
     }
 }
 
-pub fn run() -> Result<()> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("task/galaxy.txt");
-    let src = std::fs::read_to_string(path)?.trim().to_string();
-    let mut galaxy = Galaxy::new(&src)?;
-    galaxy.run()
-}
-
 pub fn bench() -> Result<()> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("task/galaxy.txt");
     let src = std::fs::read_to_string(path)?.trim().to_string();
     let mut galaxy = Galaxy::new(&src)?;
     galaxy.bench()
-}
-
-struct Galaxy {
-    galaxy_id: u64,
-    vars: HashMap<u64, E>,
-    max_var_id: u64,
 }
 
 fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
@@ -242,9 +201,7 @@ fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
     Ok(list)
 }
 
-// points: [Ap(Ap(Cons, Num(-1)), Num(-3)), Ap(Ap(Cons, Num(0)), Num(-3)), Ap(Ap(Cons, Num(1)), Num(-3)), Ap(Ap(Cons, Num(2)), Num(-2)), Ap(Ap(Cons, Num(-2)), Num(-1)), Ap(Ap(Cons, Num(-1)), Num(-1)), Ap(Ap(Cons, Num(0)), Num(-1)), Ap(Ap(Cons, Num(3)), Num(-1)), Ap(Ap(Cons, Num(-3)), Num(0)), Ap(Ap(Cons, Num(-1)), Num(0)), Ap(Ap(Cons, Num(1)), Num(0)), Ap(Ap(Cons, Num(3)), Num(0)), Ap(Ap(Cons, Num(-3)), Num(1)), Ap(Ap(Cons, Num(0)), Num(1)), Ap(Ap(Cons, Num(1)), Num(1)), Ap(Ap(Cons, Num(2)), Num(1)), Ap(Ap(Cons, Num(-2)), Num(2)), Ap(Ap(Cons, Num(-1)), Num(3)), Ap(Ap(Cons, Num(0)), Num(3)), Ap(Ap(Cons, Num(1)), Num(3)), Ap(Ap(Cons, Num(-7)), Num(-3)), Ap(Ap(Cons, Num(-8)), Num(-2))]
-
-fn images_to_points(images: Expr) -> Result<Vec<(i64, i64)>> {
+fn images_to_points(images: Expr) -> Result<Screen> {
     let mut points = Vec::new();
     for p in list_destruction(images)? {
         for p in list_destruction(p)? {
@@ -422,6 +379,12 @@ fn modulate_num(n: i64) -> String {
     modulated
 }
 
+pub(crate) struct Galaxy {
+    galaxy_id: u64,
+    vars: HashMap<u64, E>,
+    max_var_id: u64,
+}
+
 impl Galaxy {
     fn new_for_test(src: &str) -> Result<Galaxy> {
         Ok(Galaxy {
@@ -435,14 +398,11 @@ impl Galaxy {
         })
     }
 
-    fn new(src: &str) -> Result<Galaxy> {
+    pub(crate) fn new(src: &str) -> Result<Galaxy> {
         let lines = src.trim().split('\n').collect::<Vec<_>>();
-        // debug!("last line: {}", lines[lines.len() - 1]);
         let galaxy_line_re = Regex::new(r"galaxy *= :*(\d+)$").unwrap();
         let cap = galaxy_line_re.captures(lines[lines.len() - 1]).unwrap();
         let galaxy_id: u64 = cap[1].parse()?;
-        // debug!("galaxy_id: {}", galaxy_id);
-
         let mut max_var_id = 0;
 
         let vars = {
@@ -450,13 +410,11 @@ impl Galaxy {
             let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
 
             for line in lines.iter().take(lines.len() - 1) {
-                // println!("parse: line: {}", line);
                 let cap = re.captures(line).unwrap();
                 debug!("var: {}", &cap[1]);
                 let var_id = cap[1].parse::<u64>()?;
                 max_var_id = max_var_id.max(var_id);
                 vars.insert(var_id, parse_src(&cap[2])?.into());
-                // println!("{}, {}", &cap[1], &cap[2]);
             }
             vars
         };
@@ -468,14 +426,8 @@ impl Galaxy {
         })
     }
 
-    fn interact_galaxy(&mut self, state: Expr, event: Expr) -> Result<Expr> {
-        let expr = ap(ap(Expr::Var(self.galaxy_id), state), event);
-        Ok(self.eval(expr)?.expr)
-    }
-
     fn bench(&mut self) -> Result<()> {
         let mut click_events = [
-            // 8 times clicks at (0, 0)
             (0, 0),
             (0, 0),
             (0, 0),
@@ -484,19 +436,14 @@ impl Galaxy {
             (0, 0),
             (0, 0),
             (0, 0),
-            // click crosshair
             (8, 4),
             (2, -8),
             (3, 6),
             (0, -14),
             (-4, 10),
-            // many points 2 <= x <= 17, -7 <= y <= 8
             (9, -3),
-            // many points -12 <= x <= 3, 0 <= y <=15
             (-4, 10),
-            // many points -2 <= x <= 13, -4 <= y <=11
             (-2, -4),
-            // garaxy appears -> alien send
         ]
         .iter()
         .cloned()
@@ -518,7 +465,11 @@ impl Galaxy {
         Ok(())
     }
 
-    fn run(&mut self) -> Result<()> {
+    pub fn play(
+        &mut self,
+        click_receiver: ClickReceiver,
+        screen_sender: ScreenSender,
+    ) -> Result<()> {
         let mut click_events = [
             // 8 times clicks at (0, 0)
             (0, 0),
@@ -548,61 +499,26 @@ impl Galaxy {
         .collect::<VecDeque<_>>();
 
         let mut state = Nil;
-        let mut points = HashSet::new();
-
-        let mut clicks = Vec::new();
-
         loop {
             let click = if let Some(click) = click_events.pop_front() {
                 click
             } else {
-                plot::plot_galaxy(points.iter().cloned().collect())?;
-                println!("input click event: x y");
-                match get_user_input()? {
-                    UserInput::Click(x, y) => (x, y),
-                    UserInput::End => break,
-                }
+                info!("Waiting click...");
+                click_receiver.recv()?
             };
-
-            clicks.push(click);
-
-            // let event = self.get_next_event()?;
-            info!("click: {:?}", click);
-            // trace!("state: {:?}", state);
             let (x, y) = click;
+            info!("Interact with {:?}", (x, y));
             let event = ap(ap(Cons, Num(x)), Num(y));
-
             let (new_state, images) = self.interact(state.clone(), event)?;
-
-            info!("images: {:?}", images);
-            let new_points = images_to_points(images)?
-                .into_iter()
-                .collect::<HashSet<_>>();
-            trace!("new_points: {:?}", new_points);
-
-            if points != new_points || state != new_state {
-                if points != new_points {
-                    // error!("click {:?} => screen is changed: {:?}", click, new_points);
-                    error!("click {:?} => screen is changed", click);
-                }
-                if state != new_state {
-                    warn!("click {:?} => new state: {:?}", click, new_state);
-                }
-                // plot::plot_galaxy(new_points.iter().cloned().collect())?;
-            }
-            points = new_points;
+            let new_points = images_to_points(images)?.into_iter().collect::<Vec<_>>();
+            screen_sender.send(new_points)?;
             state = new_state;
         }
-
-        // info!("points: {:?}", got_points);
-        // plot::plot_galaxy(got_points.into_iter().collect())?;
-
-        error!("clicks: {:?}", clicks);
-        Ok(())
     }
 
     fn interact(&mut self, state: Expr, event: Expr) -> Result<(Expr, Expr)> {
         let expr = self.interact_galaxy(state, event)?;
+
         let InteractResult {
             flag,
             new_state,
@@ -611,22 +527,20 @@ impl Galaxy {
         if flag == Num(0) {
             Ok((new_state, images))
         } else {
-            // TODO: Avoid recursion
-            error!("Need to send alien, break later");
-            error!("data (iamges): {:?}", images);
+            info!("Sending to alien proxy");
             let modulated = modulate_expr(images)?;
-            error!("modulated: {:?}", modulated);
-
+            debug!("modulated: {:?}", modulated);
             let alien_response = api::send(modulated)?;
-            error!("raw alien_response: {:?}", alien_response);
-
+            debug!("raw alien_response: {:?}", alien_response);
             let event = demodulate(&alien_response.trim().to_string())?;
-            error!("demodulated alien_response: {:?}", event);
+            debug!("demodulated alien_response: {:?}", event);
             self.interact(new_state, event)
-
-            // [2020-07-20T09:09:34.579148848+09:00 ERROR icfp2020::galaxy] (src/galaxy.rs:549) raw alien_response: "1101100001110111110001110111011011100"
-            // [2020-07-20T09:09:34.581123519+09:00 ERROR icfp2020::galaxy] (src/galaxy.rs:552) demodulated alien_response: Ap(Ap(Cons, Num(1)), Ap(Ap(Cons, Num(15287)), Nil))
         }
+    }
+
+    fn interact_galaxy(&mut self, state: Expr, event: Expr) -> Result<Expr> {
+        let expr = ap(ap(Expr::Var(self.galaxy_id), state), event);
+        Ok(self.eval(expr)?.expr)
     }
 
     fn eval_galaxy(&mut self) -> Result<E> {
@@ -1079,7 +993,6 @@ mod tests {
     galaxy = :1141
     ";
         let result = eval_galaxy_src(&src)?;
-        // println!("1141 result: {:?}", result);
         assert_eq!(
                 format!("{:?}", result),
                 "Ap(Ap(C, B), Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, B)), Ap(Eq, Num(0))))), Ap(Ap(B, Ap(C, Var(1141))), Ap(Add, Num(-1)))))");
@@ -1109,27 +1022,13 @@ mod tests {
 
         let mut galaxy = Galaxy::new(&src)?;
         let res = galaxy.interact_galaxy(Nil, ap(ap(Cons, Num(0)), Num(0)))?;
-        // galaxy interact result: PartialAp2(Cons, Num(0), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Cons)), Ap(Ap(C, Cons), Nil)), Ap(Ap(Ap(Ap(C, Ap(Ap(B, B), Ap(Ap(C, Var(1144)), Num(1)))), Ap(Ap(C, Cons), Nil)), Var(410)), Var(429))), Ap(Var(1229), Var(429))))
-
-        // it is ap ap cons flag ap ap cons newState ap ap cons data nil
-
         assert_eq!(
             format!("{:?}", res),
             "Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Nil)), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil))))), Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(2)), Num(-2))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-2)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(3)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-3)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(3)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-3)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(2)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-2)), Num(2))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(3))), Nil))))))))))))))))))))), Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Num(-7)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-8)), Num(-2))), Nil))), Ap(Ap(Cons, Nil), Nil)))), Nil)))"
         );
-
-        println!("galaxy interact result: {:?}", res);
-
         let interact_result = InteractResult::new(res)?;
         assert_eq!(interact_result.flag, Num(0));
-        // assert_eq!(list_destruction(interact_result.new_state)?, vec![Num(0)]);
         Ok(())
-    }
-
-    #[test]
-    #[ignore]
-    fn run_galaxy_test() -> Result<()> {
-        run()
     }
 
     #[test]
