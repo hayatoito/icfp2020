@@ -1,3 +1,4 @@
+use crate::api;
 use crate::plot;
 use crate::prelude::*;
 pub use log::*;
@@ -232,6 +233,52 @@ fn images_to_points(images: Expr) -> Result<Vec<(i64, i64)>> {
     Ok(points)
 }
 
+// When it's expecting a number, seeing 11 as the first two bits creates
+// a deeper list. After a number has finished, and the list level is
+// greater than 0, a 11 continues a list, and a 00 ends the list,
+// returning to a lower level The behaviour still seems to be undefined
+// for seeing 00 when it expects a number
+
+// 0:  1
+// 1:  1010
+
+// 11: deeper list start (ap ap cons)
+// 00: deeper list end  (nil)
+
+// "[" === "ap ap cons"
+
+// "(" === 11
+// "," === 11
+// ")" === 00 (nil)
+
+// mod cons
+// ap mod nil   =   [nil]
+// nil
+// 00
+
+// ap mod ap ap cons nil nil   =   [ap ap cons nil nil]
+// [  nil nil
+// 11 00  00
+
+// ap mod ap ap cons 0 nil   =   [ap ap cons 0 nil]
+// [  0  nil
+// 11 010 00
+
+// ap mod ap ap cons 1 2   =   [ap ap cons 1 2]
+// [  1        2
+// 11 01100001 01100010
+
+// ap mod ap ap cons 1 ap ap cons 2 nil   =   [ap ap cons 1 ap ap cons 2 nil]
+// [  1        [  2        nil
+// 11 01100001 11 01100010 00
+
+// ap mod ( 1 , 2 )   =   [( 1 , 2 )]
+// [  1        [  2        nil
+// 11 01100001 11 01100010 00
+
+// ap mod ( 1 , ( 2 , 3 ) , 4 )   =   [( 1 , ( 2 , 3 ) , 4 )]
+// (  1        ,   ()    2       ,  3         )  ,   4         )
+// 11 01100001 11  11   01100010 11 01100011  00 11  01100100  00
 fn demodulate(s: &str) -> Result<Expr> {
     let mut pos = 0;
     let mut tokens = String::new();
@@ -433,7 +480,7 @@ impl Galaxy {
             (-4, 10),
             // many points -2 <= x <= 13, -4 <= y <=11
             (-2, -4),
-            // garaxy appeas
+            // garaxy appears -> alien send
             (0, 0),
         ];
 
@@ -450,26 +497,7 @@ impl Galaxy {
             let (x, y) = click;
             let event = ap(ap(Cons, Num(x)), Num(y));
 
-            let InteractResult {
-                flag,
-                new_state,
-                images,
-            } = self.interact(state.clone(), event)?;
-
-            if flag != Num(0) {
-                error!("Need to send alien, break later");
-                error!("data: {:?}", images);
-                let modulated = modulate_expr(images)?;
-                error!("modulated: {:?}", modulated);
-
-                // TODO: Send modulated to alien.
-
-                effective_clicks.push(click);
-                break;
-            }
-
-            // TODO: Fails
-            // Ap(Ap(Cons, Num(0)), Nil)
+            let (new_state, images) = self.interact(state.clone(), event)?;
 
             info!("images: {:?}", images);
             let new_points = images_to_points(images)?
@@ -501,10 +529,32 @@ impl Galaxy {
         Ok(())
     }
 
-    fn interact(&mut self, state: Expr, event: Expr) -> Result<InteractResult> {
-        debug!("> interact");
+    fn interact(&mut self, state: Expr, event: Expr) -> Result<(Expr, Expr)> {
         let expr = self.interact_galaxy(state, event)?;
-        InteractResult::new(expr)
+        let InteractResult {
+            flag,
+            new_state,
+            images,
+        } = InteractResult::new(expr)?;
+        if flag == Num(0) {
+            Ok((new_state, images))
+        } else {
+            // TODO: Avoid recursion
+            error!("Need to send alien, break later");
+            error!("data (iamges): {:?}", images);
+            let modulated = modulate_expr(images)?;
+            error!("modulated: {:?}", modulated);
+
+            let alien_response = api::send(modulated)?;
+            error!("raw alien_response: {:?}", alien_response);
+
+            let event = demodulate(&alien_response.trim().to_string())?;
+            error!("demodulated alien_response: {:?}", event);
+            self.interact(new_state, event)
+
+            // [2020-07-20T09:09:34.579148848+09:00 ERROR icfp2020::galaxy] (src/galaxy.rs:549) raw alien_response: "1101100001110111110001110111011011100"
+            // [2020-07-20T09:09:34.581123519+09:00 ERROR icfp2020::galaxy] (src/galaxy.rs:552) demodulated alien_response: Ap(Ap(Cons, Num(1)), Ap(Ap(Cons, Num(15287)), Nil))
+        }
     }
 
     fn eval_galaxy(&mut self) -> Result<E> {
