@@ -130,6 +130,32 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
     }
 }
 
+enum UserInput {
+    Click(i64, i64),
+    End,
+}
+
+fn get_user_input() -> Result<UserInput> {
+    loop {
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if input == "end" {
+            return Ok(UserInput::End);
+        } else {
+            let args = input.trim().split_whitespace().collect::<Vec<_>>();
+            if args.len() < 2 {
+                error!("invalid args: len < 2");
+            }
+            if let Ok(x) = args[0].parse::<i64>() {
+                if let Ok(y) = args[1].parse::<i64>() {
+                    return Ok(UserInput::Click(x, y));
+                }
+            }
+            error!("invalid input");
+        }
+    }
+}
+
 #[derive(PartialEq, Clone, Debug)]
 struct InteractResult {
     flag: Expr,
@@ -156,6 +182,14 @@ pub fn run() -> Result<()> {
     let src = std::fs::read_to_string(path)?.trim().to_string();
     let mut galaxy = Galaxy::new(&src)?;
     galaxy.run()
+}
+
+pub fn bench() -> Result<()> {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("task/galaxy.txt");
+    let src = std::fs::read_to_string(path)?.trim().to_string();
+    let mut galaxy = Galaxy::new(&src)?;
+    galaxy.bench()
 }
 
 struct Galaxy {
@@ -439,26 +473,8 @@ impl Galaxy {
         Ok(self.eval(expr)?.expr)
     }
 
-    #[allow(dead_code)]
-    fn get_next_event(&self) -> Result<(i64, i64)> {
-        loop {
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-            let args = input.trim().split_whitespace().collect::<Vec<_>>();
-            if args.len() < 2 {
-                error!("invalid args: len < 2");
-            }
-            if let Ok(x) = args[0].parse::<i64>() {
-                if let Ok(y) = args[1].parse::<i64>() {
-                    return Ok((x, y));
-                }
-            }
-            error!("invalid line");
-        }
-    }
-
-    fn run(&mut self) -> Result<()> {
-        let click_events = vec![
+    fn bench(&mut self) -> Result<()> {
+        let mut click_events = [
             // 8 times clicks at (0, 0)
             (0, 0),
             (0, 0),
@@ -481,16 +497,75 @@ impl Galaxy {
             // many points -2 <= x <= 13, -4 <= y <=11
             (-2, -4),
             // garaxy appears -> alien send
-            (0, 0),
-        ];
+        ]
+        .iter()
+        .cloned()
+        .collect::<VecDeque<_>>();
 
         let mut state = Nil;
+        while let Some(click) = click_events.pop_front() {
+            let (x, y) = click;
+            let event = ap(ap(Cons, Num(x)), Num(y));
+            let (new_state, images) = self.interact(state.clone(), event)?;
+            let _new_points = images_to_points(images)?
+                .into_iter()
+                .collect::<HashSet<_>>();
+            state = new_state;
+        }
+        println!("bench ends: state: {:?}", state);
+        assert_eq!(format!("{:?}", state),
+                   "Ap(Ap(Cons, Num(2)), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Ap(Ap(Cons, Num(-1)), Nil))), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil))))");
+        Ok(())
+    }
 
+    fn run(&mut self) -> Result<()> {
+        let mut click_events = [
+            // 8 times clicks at (0, 0)
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            // click crosshair
+            (8, 4),
+            (2, -8),
+            (3, 6),
+            (0, -14),
+            (-4, 10),
+            // many points 2 <= x <= 17, -7 <= y <= 8
+            (9, -3),
+            // many points -12 <= x <= 3, 0 <= y <=15
+            (-4, 10),
+            // many points -2 <= x <= 13, -4 <= y <=11
+            (-2, -4),
+            // garaxy appears -> alien send
+        ]
+        .iter()
+        .cloned()
+        .collect::<VecDeque<_>>();
+
+        let mut state = Nil;
         let mut points = HashSet::new();
 
-        let mut effective_clicks = Vec::new();
+        let mut clicks = Vec::new();
 
-        for click in click_events {
+        loop {
+            let click = if let Some(click) = click_events.pop_front() {
+                click
+            } else {
+                plot::plot_galaxy(points.iter().cloned().collect())?;
+                println!("input click event: x y");
+                match get_user_input()? {
+                    UserInput::Click(x, y) => (x, y),
+                    UserInput::End => break,
+                }
+            };
+
+            clicks.push(click);
+
             // let event = self.get_next_event()?;
             info!("click: {:?}", click);
             // trace!("state: {:?}", state);
@@ -506,8 +581,6 @@ impl Galaxy {
             trace!("new_points: {:?}", new_points);
 
             if points != new_points || state != new_state {
-                effective_clicks.push(click.clone());
-
                 if points != new_points {
                     // error!("click {:?} => screen is changed: {:?}", click, new_points);
                     error!("click {:?} => screen is changed", click);
@@ -524,8 +597,7 @@ impl Galaxy {
         // info!("points: {:?}", got_points);
         // plot::plot_galaxy(got_points.into_iter().collect())?;
 
-        error!("effective_clicks: {:?}", effective_clicks);
-        plot::plot_galaxy(points.iter().cloned().collect())?;
+        error!("clicks: {:?}", clicks);
         Ok(())
     }
 

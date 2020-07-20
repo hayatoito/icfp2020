@@ -42,6 +42,8 @@ enum Command {
     /// Interact with galaxy
     #[structopt(name = "interact")]
     Interact,
+    #[structopt(name = "bench")]
+    Bench,
 }
 
 fn env_logger_verbose_init() {
@@ -85,6 +87,7 @@ fn main() -> Result<()> {
         }
         Command::Api => api::test()?,
         Command::Interact => galaxy::run()?,
+        Command::Bench => galaxy::bench()?,
     }
     Ok(())
 }
