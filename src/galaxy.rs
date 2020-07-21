@@ -551,17 +551,9 @@ impl Galaxy {
         trace!("eval var: {}", id);
         let entry = self.vars[&id].clone();
         if entry.evaluated {
-            trace!("eval var: {} -> evaluated: {:?}", id, entry.expr);
             Ok(entry)
         } else {
-            trace!("eval var: {} -> toeval: {:?}", id, entry.expr);
             let res = self.eval(entry.expr)?;
-            trace!(
-                "eval var: {} <- evaluated? {} {:?}",
-                id,
-                res.evaluated,
-                res.expr
-            );
             assert!(self.vars.insert(id, res.clone()).is_some());
             Ok(res)
         }
@@ -577,46 +569,39 @@ impl Galaxy {
     fn eval(&mut self, e: impl Into<E>) -> Result<E> {
         let e: E = e.into();
         if e.evaluated {
-            trace!("eval: {:?} -> evaluated", e);
             Ok(e)
         } else {
-            trace!("eval: {:?} -> toeval", e);
-            let res = self.eval_internal(e.expr)?;
-            trace!("eval result: {:?}", res);
+            let mut e = e;
+            while !e.evaluated {
+                match e.expr {
+                    Ap(left, right) => {
+                        e = self.apply(*left, *right)?;
+                    }
+                    Var(n) => {
+                        return self.eval_var(n);
+                    }
+                    x => {
+                        return Ok(E {
+                            expr: x,
+                            evaluated: true,
+                        });
+                    }
+                }
+            }
+            Ok(e)
+        }
+    }
+
+    fn apply(&mut self, f: impl Into<E>, x0: impl Into<E>) -> Result<E> {
+        fn ok(expr: Expr) -> Result<E> {
             Ok(E {
-                expr: res,
+                expr,
                 evaluated: true,
             })
         }
-    }
 
-    fn eval_internal(&mut self, mut e: Expr) -> Result<Expr> {
-        loop {
-            match e {
-                Ap(left, right) => {
-                    let (expr, evaled) = self.apply(*left, *right)?;
-                    if evaled {
-                        return Ok(expr);
-                    }
-                    e = expr;
-                }
-                Var(n) => {
-                    return Ok(self.eval_var(n)?.expr);
-                }
-                x => {
-                    return Ok(x);
-                }
-            }
-        }
-    }
-
-    fn apply(&mut self, f: impl Into<E>, x0: impl Into<E>) -> Result<(Expr, bool)> {
-        fn ok(expr: Expr) -> Result<(Expr, bool)> {
-            Ok((expr, true))
-        }
-
-        fn reapply(expr: Expr) -> Result<(Expr, bool)> {
-            Ok((expr, false))
+        fn reapply(expr: Expr) -> Result<E> {
+            Ok(expr.into())
         }
 
         let f: E = f.into();
@@ -704,11 +689,11 @@ impl Galaxy {
                                 // ap ap ap s add inc 1   =   3
                                 let e2: E = {
                                     if e2.evaluated {
-                                        trace!("s-combinator: e2 is already evaluated)");
                                         e2
-                                    } else {
-                                        trace!("s-combinator: e2 is not evaluated");
+                                    } else if let Ap(_, _) = &e2.expr {
                                         Var(self.add_new_var(e2.expr)).into()
+                                    } else {
+                                        e2
                                     }
                                 };
                                 trace!("s-combin!ator: E2: {:?}", e2);
