@@ -24,9 +24,11 @@ struct ParseResult<'a> {
     tokens: &'a [&'a str],
 }
 
-#[derive(PartialEq, Clone, Debug)]
+// #[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone)]
 pub enum Expr {
-    Ap(Box<E>, Box<E>),
+    Ap(Box<Expr>, Box<Expr>, bool),
+    Var(u64),
     Num(i64),
     Add,
     Mul,
@@ -47,34 +49,40 @@ pub enum Expr {
     Cdr,
     Nil,
     Isnil,
-    Var(u64),
 }
 
 use Expr::*;
 
 // Convenient functions
-fn ap(e0: impl Into<E>, e1: impl Into<E>) -> Expr {
-    Ap(Box::new(e0.into()), Box::new(e1.into()))
+fn ap(e0: Expr, e1: Expr) -> Expr {
+    Ap(Box::new(e0), Box::new(e1), false)
 }
 
-// #[derive(PartialEq, Clone, Debug)]
-#[derive(PartialEq, Clone)]
-pub struct E {
-    expr: Expr,
-    evaluated: bool,
-}
-
-impl std::fmt::Debug for E {
+impl std::fmt::Debug for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.expr)
-    }
-}
-
-impl From<Expr> for E {
-    fn from(expr: Expr) -> Self {
-        E {
-            expr,
-            evaluated: false,
+        match self {
+            Ap(e0, e1, _) => write!(f, "Ap({:?}, {:?})", e0, e1),
+            Var(id) => write!(f, "Var({})", id),
+            Num(n) => write!(f, "Num({})", n),
+            Add => write!(f, "Add"),
+            Mul => write!(f, "Mul"),
+            Div => write!(f, "Div"),
+            Eq => write!(f, "Eq"),
+            Lt => write!(f, "Lt"),
+            Neg => write!(f, "Neg"),
+            Inc => write!(f, "Inc"),
+            Dec => write!(f, "Dec"),
+            S => write!(f, "S"),
+            C => write!(f, "C"),
+            B => write!(f, "B"),
+            T => write!(f, "T"),
+            F => write!(f, "F"),
+            I => write!(f, "I"),
+            Cons => write!(f, "Cons"),
+            Car => write!(f, "Car"),
+            Cdr => write!(f, "Cdr"),
+            Nil => write!(f, "Nil"),
+            Isnil => write!(f, "Isnil"),
         }
     }
 }
@@ -172,14 +180,14 @@ fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
             Nil => Ok(None),
             // 1. [ap ap cons 1 nil]
             // 2. [ap ap cons 1 ap ap cons 2 nil]
-            Ap(x0, x1) => match x0.expr {
+            Ap(x0, x1, _) => match *x0 {
                 // 1. ap [ap cons 1] [nil]
                 // 2. ap [ap cons 1 ap ap cons 2] [nil]
-                Ap(x0, x2) => match x0.expr {
+                Ap(x0, x2, _) => match *x0 {
                     // 1. ap ap [cons] [1] [nil]
                     // 2. ap ap [cons] [1] [ap ap cons 2 nil]
                     Cons => {
-                        Ok(Some((x2.expr, x1.expr)))
+                        Ok(Some((*x2, *x1)))
                         // let mut post = internal(x1.expr)?;
                         // post.push(x2.expr);
                         // Ok(post)
@@ -206,9 +214,9 @@ fn images_to_points(images: Expr) -> Result<Screen> {
     for p in list_destruction(images)? {
         for p in list_destruction(p)? {
             // Ap(Ap(Cons, Num(-1)), Num(-3))
-            if let Ap(x, y) = p {
-                if let Ap(c, x) = x.expr {
-                    if let (Cons, Num(x), Num(y)) = (c.expr, x.expr, y.expr) {
+            if let Ap(x, y, _) = p {
+                if let Ap(c, x, _) = *x {
+                    if let (Cons, Num(x), Num(y)) = (*c, *x, *y) {
                         points.push((x, y));
                     } else {
                         bail!("can not parse point")
@@ -311,10 +319,10 @@ fn demodulate(s: &str) -> Result<Expr> {
 }
 
 fn cons_car_cdr(e: Expr) -> Result<(Expr, Expr)> {
-    if let Ap(a, cdr) = e {
-        if let Ap(b, car) = a.expr {
-            ensure!(b.expr == Cons, "invalid modulator: not cons");
-            return Ok((car.expr, cdr.expr));
+    if let Ap(a, cdr, _) = e {
+        if let Ap(b, car, _) = *a {
+            ensure!(*b == Cons, "invalid modulator: not cons");
+            return Ok((*car, *cdr));
         }
     }
     bail!("invalid modular")
@@ -381,7 +389,7 @@ fn modulate_num(n: i64) -> String {
 
 pub(crate) struct Galaxy {
     galaxy_id: u64,
-    vars: HashMap<u64, E>,
+    vars: HashMap<u64, (bool, Expr)>,
     max_var_id: u64,
 }
 
@@ -391,7 +399,7 @@ impl Galaxy {
             galaxy_id: 1,
             vars: {
                 let mut vars = HashMap::new();
-                vars.insert(1, parse_src(src)?.into());
+                vars.insert(1, (false, parse_src(src)?));
                 vars
             },
             max_var_id: 1,
@@ -414,7 +422,7 @@ impl Galaxy {
                 debug!("var: {}", &cap[1]);
                 let var_id = cap[1].parse::<u64>()?;
                 max_var_id = max_var_id.max(var_id);
-                vars.insert(var_id, parse_src(&cap[2])?.into());
+                vars.insert(var_id, (false, parse_src(&cap[2])?));
             }
             vars
         };
@@ -540,21 +548,21 @@ impl Galaxy {
 
     fn interact_galaxy(&mut self, state: Expr, event: Expr) -> Result<Expr> {
         let expr = ap(ap(Expr::Var(self.galaxy_id), state), event);
-        Ok(self.eval(expr)?.expr)
+        self.eval(expr)
     }
 
-    fn eval_galaxy(&mut self) -> Result<E> {
+    fn eval_galaxy(&mut self) -> Result<Expr> {
         self.eval_var(self.galaxy_id)
     }
 
-    fn eval_var(&mut self, id: u64) -> Result<E> {
+    fn eval_var(&mut self, id: u64) -> Result<Expr> {
         trace!("eval var: {}", id);
-        let entry = self.vars[&id].clone();
-        if entry.evaluated {
-            Ok(entry)
+        let (evaluated, expr) = self.vars[&id].clone();
+        if evaluated {
+            Ok(expr)
         } else {
-            let res = self.eval(entry.expr)?;
-            assert!(self.vars.insert(id, res.clone()).is_some());
+            let res = self.eval(expr)?;
+            assert!(self.vars.insert(id, (true, res.clone())).is_some());
             Ok(res)
         }
     }
@@ -562,164 +570,158 @@ impl Galaxy {
     fn add_new_var(&mut self, expr: Expr) -> u64 {
         self.max_var_id += 1;
         let new_id = self.max_var_id;
-        assert!(self.vars.insert(new_id, expr.into()).is_none());
+        assert!(self.vars.insert(new_id, (false, expr)).is_none());
         new_id
     }
 
-    fn eval(&mut self, e: impl Into<E>) -> Result<E> {
-        let e: E = e.into();
-        if e.evaluated {
-            Ok(e)
-        } else {
-            let mut e = e;
-            while !e.evaluated {
-                match e.expr {
-                    Ap(left, right) => {
-                        e = self.apply(*left, *right)?;
-                    }
-                    Var(n) => {
-                        return self.eval_var(n);
-                    }
-                    x => {
-                        return Ok(E {
-                            expr: x,
-                            evaluated: true,
-                        });
-                    }
+    fn eval(&mut self, mut expr: Expr) -> Result<Expr> {
+        loop {
+            match expr {
+                Ap(left, right, false) => {
+                    expr = self.apply(*left, *right)?;
+                }
+                e @ Ap(_, _, true) => {
+                    return Ok(e);
+                }
+                Var(n) => {
+                    return self.eval_var(n);
+                }
+                x => {
+                    return Ok(x);
                 }
             }
-            Ok(e)
         }
     }
 
-    fn apply(&mut self, f: impl Into<E>, x0: impl Into<E>) -> Result<E> {
-        fn ok(expr: Expr) -> Result<E> {
-            Ok(E {
-                expr,
-                evaluated: true,
-            })
+    fn apply(&mut self, f: Expr, x0: Expr) -> Result<Expr> {
+        fn evaled_ap(e0: Expr, e1: Expr) -> Result<Expr> {
+            Ok(Ap(Box::new(e0), Box::new(e1), true))
         }
 
-        fn reapply(expr: Expr) -> Result<E> {
-            Ok(expr.into())
-        }
-
-        let f: E = f.into();
-        let x0: E = x0.into();
         trace!("apply: f: {:?}, x0: {:?}", f, x0);
-        let f = self.eval(f)?;
-        match f.expr {
+        match self.eval(f)? {
             Num(_) => bail!("can not apply: nuber"),
-            Neg => match self.eval(x0)?.expr {
-                Num(n) => ok(Num(-n)),
+            Neg => match self.eval(x0)? {
+                Num(n) => Ok(Num(-n)),
                 _ => bail!("can not apply: neg"),
             },
-            Inc => match self.eval(x0)?.expr {
-                Num(n) => ok(Num(n + 1)),
+            Inc => match self.eval(x0)? {
+                Num(n) => Ok(Num(n + 1)),
                 _ => bail!("can not apply: inc"),
             },
-            Dec => match self.eval(x0)?.expr {
-                Num(n) => ok(Num(n - 1)),
+            Dec => match self.eval(x0)? {
+                Num(n) => Ok(Num(n - 1)),
                 _ => bail!("can not apply: dec"),
             },
-            I => ok(self.eval(x0)?.expr),
+            I => self.eval(x0),
             // ap car x2 = ap x2 t
-            // Car => self.apply(x0, T),
-            // Cdr => self.apply(x0, F),
+            Car => self.apply(x0, T),
+            Cdr => self.apply(x0, F),
             // Avoid recursion
-            Car => reapply(ap(x0, T)),
-            Cdr => reapply(ap(x0, F)),
-            Nil => ok(T),
-            Isnil => match self.eval(x0)?.expr {
-                Nil => ok(T),
-                _ => ok(F),
+            // Car => Ok(ap(x0, T)),
+            // Cdr => Ok(ap(x0, F)),
+            Nil => Ok(T),
+            Isnil => match self.eval(x0)? {
+                Nil => Ok(T),
+                _ => Ok(F),
             },
-            Ap(exp, e0) => {
-                let (e0, e1): (E, E) = (*e0, x0); // For readability.
-                let f = self.eval(*exp)?;
-                match f.expr {
-                    Add => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
-                        (Num(n0), Num(n1)) => ok(Num(n0 + n1)),
+            Ap(exp, e0, _) => {
+                let (e0, e1): (Expr, Expr) = (*e0, x0); // For readability.
+                match self.eval(*exp)? {
+                    Add => match (self.eval(e0)?, self.eval(e1)?) {
+                        (Num(n0), Num(n1)) => Ok(Num(n0 + n1)),
                         _ => bail!("can not apply: add"),
                     },
-                    Mul => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
-                        (Num(n0), Num(n1)) => ok(Num(n0 * n1)),
+                    Mul => match (self.eval(e0)?, self.eval(e1)?) {
+                        (Num(n0), Num(n1)) => Ok(Num(n0 * n1)),
                         // _ => bail!("can not apply: mul"),
                         (x, y) => bail!("can not apply: mul: e0: {:?}, e1: {:?}", x, y),
                     },
-                    Div => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
-                        (Num(n0), Num(n1)) => ok(Num(n0 / n1)),
+                    Div => match (self.eval(e0)?, self.eval(e1)?) {
+                        (Num(n0), Num(n1)) => Ok(Num(n0 / n1)),
                         _ => bail!("can not apply: div"),
                     },
-                    Eq => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
+                    Eq => match (self.eval(e0)?, self.eval(e1)?) {
                         (Num(n0), Num(n1)) => {
                             if n0 == n1 {
-                                ok(T)
+                                Ok(T)
                             } else {
-                                ok(F)
+                                Ok(F)
                             }
                         }
                         _ => bail!("can not apply: eq"),
                     },
-                    Lt => match (self.eval(e0)?.expr, self.eval(e1)?.expr) {
+                    Lt => match (self.eval(e0)?, self.eval(e1)?) {
                         (Num(n0), Num(n1)) => {
                             if n0 < n1 {
-                                ok(T)
+                                Ok(T)
                             } else {
-                                ok(F)
+                                Ok(F)
                             }
                         }
                         _ => bail!("can not apply: lt"),
                     },
-                    T => ok(self.eval(e0)?.expr),
-                    F => ok(self.eval(e1)?.expr),
-                    S => ok(ap(ap(S, e0), e1)),
-                    C => ok(ap(ap(C, e0), e1)),
-                    B => ok(ap(ap(B, e0), e1)),
+                    T => self.eval(e0),
+                    F => self.eval(e1),
+                    S => evaled_ap(ap(S, e0), e1),
+                    C => evaled_ap(ap(C, e0), e1),
+                    B => evaled_ap(ap(B, e0), e1),
                     // Cons => Ok(ap(ap(Cons, e0), e1)),
                     // Eval cons earger
-                    Cons => ok(ap(ap(Cons, self.eval(e0)?), self.eval(e1)?)),
-                    Ap(exp, e) => {
-                        let (e0, e1, e2): (E, E, E) = (*e, e0, e1);
-                        let f = self.eval(*exp)?;
-                        match f.expr {
+                    Cons => Ok(Ap(
+                        Box::new(ap(Cons, self.eval(e0)?)),
+                        Box::new(self.eval(e1)?),
+                        true,
+                    )),
+                    Ap(exp, e, _) => {
+                        let (e0, e1, e2): (Expr, Expr, Expr) = (*e, e0, e1);
+                        match self.eval(*exp)? {
                             S => {
                                 trace!("expand s-combinator: {:?}", (&e0, &e1, &e2));
                                 // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                                 // ap ap ap s add inc 1   =   3
-                                let e2: E = {
-                                    if e2.evaluated {
-                                        e2
-                                    } else if let Ap(_, _) = &e2.expr {
-                                        Var(self.add_new_var(e2.expr)).into()
-                                    } else {
-                                        e2
-                                    }
+                                // let e2: Expr = {
+                                //     if e2.evaluated {
+                                //         e2
+                                //     } else if let Ap(_, _) = &e2.expr {
+                                //         Var(self.add_new_var(e2.expr)).into()
+                                //     } else {
+                                //         e2
+                                //     }
+                                // };
+
+                                let e2: Expr = if let Ap(_, _, false) = &e2 {
+                                    Var(self.add_new_var(e2))
+                                } else {
+                                    e2
                                 };
+
                                 trace!("s-combin!ator: E2: {:?}", e2);
 
                                 let ap_x0_x2 = ap(e0, e2.clone());
                                 let ap_x1_x2 = ap(e1, e2);
-                                // self.apply(ap_x0_x2, ap_x1_x2)
-                                reapply(ap(ap_x0_x2, ap_x1_x2))
+                                // Ok(ap(ap_x0_x2, ap_x1_x2))
+                                self.apply(ap_x0_x2, ap_x1_x2)
                             }
                             C => {
                                 // ap ap ap c x0 x1 x2   =   ap ap x0 x2 x1
                                 // ap ap ap c add 1 2   =   3
-                                // self.apply(ap(e0, e2), e1)
-                                reapply(ap(ap(e0, e2), e1))
+                                // Ok(ap(ap(e0, e2), e1))
+                                self.apply(ap(e0, e2), e1)
                             }
                             B => {
                                 // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
                                 // ap ap ap b inc dec x0   =   x0
-                                // self.apply(e0, ap(e1, e2))
-                                reapply(ap(e0, ap(e1, e2)))
+                                // Ok(ap(e0, ap(e1, e2)))
+                                self.apply(e0, ap(e1, e2))
                             }
                             Cons => {
                                 // cons
                                 // ap ap ap cons x0 x1 x2   =   ap ap x2 x0 x1
                                 // self.apply(ap(e2, e0), e1)
-                                reapply(ap(ap(e2, e0), e1))
+
+                                // Need to avoid recursion
+                                Ok(ap(ap(e2, e0), e1))
                             }
                             _ => bail!("can not apply: ap ap ap"),
                         }
@@ -727,7 +729,7 @@ impl Galaxy {
                     _ => bail!("can not apply: ap ap"),
                 }
             }
-            f => ok(ap(f, x0)),
+            f => evaled_ap(f, x0),
         }
     }
 }
@@ -736,17 +738,13 @@ pub fn eval_src(src: &str) -> Result<Expr> {
     // let exp = parse_src(src)?;
     // eval(exp)
     let mut galaxy = Galaxy::new_for_test(src)?;
-    galaxy.eval_galaxy().map(|e| e.expr)
+    galaxy.eval_galaxy()
 }
 
 pub fn eval_galaxy_src(src: &str) -> Result<Expr> {
     let mut galaxy = Galaxy::new(src)?;
-    galaxy.eval_galaxy().map(|e| e.expr)
+    galaxy.eval_galaxy()
 }
-
-// fn send(s: &str) -> String {
-//     todo!()
-// }
 
 #[cfg(test)]
 mod tests {
