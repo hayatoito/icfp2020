@@ -23,7 +23,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
       - run: rustup component add rustfmt
       - run: rustup component add clippy
-      - run: cargo build --release --offline
+      - run: cargo build --release
       - run: cargo test --release
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- --deny warnings
