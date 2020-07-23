@@ -3,10 +3,11 @@ use crate::prelude::*;
 use log::*;
 use regex::Regex;
 use std::convert::From;
+use std::rc::Rc;
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum Expr {
-    Ap(Box<Expr>, Box<Expr>, bool),
+    Ap(Rc<Expr>, Rc<Expr>, bool),
     Var(usize),
     Num(i64),
     Add,
@@ -33,26 +34,26 @@ pub enum Expr {
 use Expr::*;
 
 // Convenient functions
-fn ap(e0: Expr, e1: Expr) -> Expr {
-    Ap(Box::new(e0), Box::new(e1), false)
+fn ap(e0: Rc<Expr>, e1: Rc<Expr>) -> Rc<Expr> {
+    Rc::new(Ap(e0, e1, false))
 }
 
 fn tokenize(src: &str) -> Vec<&str> {
     src.split_whitespace().collect()
 }
 
-fn parse_src(src: &str) -> Result<Expr> {
+fn parse_src(src: &str) -> Result<Rc<Expr>> {
     let tokens = tokenize(src);
-    let parse_result = parse(&tokens)?;
+    let ParseResult { exp, tokens } = parse(&tokens)?;
     ensure!(
-        parse_result.tokens.is_empty(),
-        format!("tokens are not consumed: {:?}", parse_result.tokens)
+        tokens.is_empty(),
+        format!("tokens are not consumed: {:?}", tokens)
     );
-    Ok(parse_result.exp)
+    Ok(exp)
 }
 
 struct ParseResult<'a> {
-    exp: Expr,
+    exp: Rc<Expr>,
     tokens: &'a [&'a str],
 }
 
@@ -69,7 +70,7 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
         })
     } else {
         Ok(ParseResult {
-            exp: match current_token {
+            exp: Rc::new(match current_token {
                 "add" => Add,
                 "eq" => Eq,
                 "mul" => Mul,
@@ -100,26 +101,26 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
                         Num(num)
                     }
                 }
-            },
+            }),
             tokens,
         })
     }
 }
 
 impl Expr {
-    fn destruct_cons(self) -> Result<Option<(Expr, Expr)>> {
-        match self {
+    fn destruct_cons(self: &Rc<Self>) -> Result<Option<(Rc<Expr>, Rc<Expr>)>> {
+        match self.as_ref() {
             Nil => Ok(None),
-            Ap(a, cdr, _) => match *a {
-                Ap(cons, car, _) if *cons == Cons => Ok(Some((*car, *cdr))),
+            Ap(a, cdr, _) => match a.as_ref() {
+                Ap(cons, car, _) if cons.as_ref() == &Cons => Ok(Some((car.clone(), cdr.clone()))),
                 _ => bail!("invalid structure"),
             },
             _ => bail!("invalid structure"),
         }
     }
 
-    fn into_vec(self) -> Result<Vec<Expr>> {
-        let mut expr = self;
+    fn to_vec(self: &Rc<Self>) -> Result<Vec<Rc<Expr>>> {
+        let mut expr = self.clone();
         let mut list = Vec::new();
         while let Some((x, xs)) = expr.destruct_cons()? {
             list.push(x);
@@ -128,13 +129,17 @@ impl Expr {
         Ok(list)
     }
 
-    fn into_screen(self) -> Result<Screen> {
+    fn to_screen(self: &Rc<Self>) -> Result<Screen> {
         let mut screen = Screen::new();
-        for image_expr in self.into_vec()? {
+        for image_expr in self.to_vec()? {
             let mut image = Image::new();
-            for p in image_expr.into_vec()? {
-                if let Some((Num(x), Num(y))) = p.destruct_cons()? {
-                    image.push((x, y));
+            for p in image_expr.to_vec()? {
+                if let Some((x, y)) = p.destruct_cons()? {
+                    if let (Num(x), Num(y)) = (x.as_ref(), y.as_ref()) {
+                        image.push((*x, *y));
+                    } else {
+                        bail!("invalid point structure")
+                    }
                 } else {
                     bail!("invalid point structure")
                 }
@@ -143,16 +148,23 @@ impl Expr {
         }
         Ok(screen)
     }
+
+    fn size(&self) -> u64 {
+        match self {
+            Ap(a, b, _) => 1 + a.size() + b.size(),
+            _ => 1,
+        }
+    }
 }
 
 trait Demodulatable {
-    fn demodulate(self) -> Result<Expr>;
+    fn demodulate(self) -> Result<Rc<Expr>>;
 }
 
 impl Demodulatable for &str {
     // 11: ap ap cons
     // 00: nil
-    fn demodulate(self) -> Result<Expr> {
+    fn demodulate(self) -> Result<Rc<Expr>> {
         let s: &str = self;
         let mut pos = 0;
         let mut tokens = String::new();
@@ -195,7 +207,7 @@ impl Demodulatable for &str {
 }
 
 trait Modulatable {
-    fn modulate(self) -> Result<String>;
+    fn modulate(&self) -> Result<String>;
 }
 
 const MOD_NUM_PREFIX: [&str; 16] = [
@@ -218,8 +230,8 @@ const MOD_NUM_PREFIX: [&str; 16] = [
 ];
 
 impl Modulatable for i64 {
-    fn modulate(self) -> Result<String> {
-        let n = self;
+    fn modulate(&self) -> Result<String> {
+        let n = *self;
         let mut modulated = String::new();
         if n == 0 {
             return Ok("010".to_string());
@@ -230,7 +242,7 @@ impl Modulatable for i64 {
             modulated.push_str("10");
         }
 
-        let n: u128 = (self as i128).abs() as u128;
+        let n: u128 = (n as i128).abs() as u128;
 
         for (i, prefix) in MOD_NUM_PREFIX.iter().enumerate() {
             let bits = (i + 1) * 4;
@@ -245,13 +257,13 @@ impl Modulatable for i64 {
     }
 }
 
-impl Modulatable for Expr {
-    fn modulate(self) -> Result<String> {
-        match self {
+impl Modulatable for Rc<Expr> {
+    fn modulate(&self) -> Result<String> {
+        match self.as_ref() {
             Nil => Ok("00".to_string()),
             Num(n) => n.modulate(),
-            e => {
-                let (car, cdr) = e.destruct_cons()?.unwrap();
+            _ => {
+                let (car, cdr) = self.destruct_cons()?.unwrap();
                 let mut modulated = "11".to_string();
                 modulated.push_str(&car.modulate()?);
                 modulated.push_str(&cdr.modulate()?);
@@ -268,16 +280,16 @@ enum Mod {
 }
 
 impl Mod {
-    fn new(e: Expr) -> Result<Mod> {
-        match e {
-            Ap(a, cdr, _) => match *a {
-                Ap(cons, car, _) if *cons == Cons => Ok(Mod::Cons(
-                    Box::new(Mod::new(*car)?),
-                    Box::new(Mod::new(*cdr)?),
+    fn new(e: Rc<Expr>) -> Result<Mod> {
+        match e.as_ref() {
+            Ap(a, cdr, _) => match a.as_ref() {
+                Ap(cons, car, _) if cons.as_ref() == &Cons => Ok(Mod::Cons(
+                    Box::new(Mod::new(car.clone())?),
+                    Box::new(Mod::new(cdr.clone())?),
                 )),
                 _ => bail!("Invalid mod"),
             },
-            Num(n) => Ok(Mod::Num(n)),
+            Num(n) => Ok(Mod::Num(*n)),
             Nil => Ok(Mod::Nil),
             _ => bail!("Invalid mod"),
         }
@@ -296,14 +308,14 @@ impl std::fmt::Display for Mod {
 
 #[derive(PartialEq, Clone, Debug)]
 struct InteractResult {
-    flag: Expr,
-    new_state: Expr,
-    images: Expr,
+    flag: Rc<Expr>,
+    new_state: Rc<Expr>,
+    images: Rc<Expr>,
 }
 
 impl InteractResult {
-    fn new(expr: Expr) -> Result<InteractResult> {
-        let list = expr.into_vec()?;
+    fn new(expr: Rc<Expr>) -> Result<InteractResult> {
+        let list = expr.to_vec()?;
         assert_eq!(list.len(), 3);
         let mut iter = list.into_iter();
         Ok(InteractResult {
@@ -326,13 +338,13 @@ pub(crate) struct Galaxy {
     galaxy_id: usize,
     variables: Variables,
     var_lookup_count: u64,
+    var_size: u64,
     eval_count: u64,
     apply_count: u64,
 }
 
 struct Variables {
-    // TODO: Use Rc<Expr> to avoid clone. This requires non trivial changes.
-    vars: Vec<(bool, Expr)>,
+    vars: Vec<(bool, Rc<Expr>)>,
 }
 
 impl Variables {
@@ -340,23 +352,23 @@ impl Variables {
         Variables { vars: Vec::new() }
     }
 
-    fn insert(&mut self, id: usize, expr: Expr) {
+    fn insert(&mut self, id: usize, expr: Rc<Expr>) {
         if self.vars.len() <= id as usize {
-            self.vars.resize((id + 1) as usize, (false, Nil));
+            self.vars.resize((id + 1) as usize, (false, Rc::new(Nil)));
         }
-        assert_eq!(&self.vars[id], &(false, Nil));
+        // assert_eq!(&self.vars[id], &(false, Rc::new(Nil)));
         self.vars[id] = (false, expr);
     }
 
-    fn insert_evaluated(&mut self, id: usize, expr: Expr) {
+    fn insert_evaluated(&mut self, id: usize, expr: Rc<Expr>) {
         self.vars[id] = (true, expr);
     }
 
-    fn lookup(&self, id: usize) -> (bool, Expr) {
+    fn lookup(&self, id: usize) -> (bool, Rc<Expr>) {
         self.vars[id].clone()
     }
 
-    fn insert_new(&mut self, expr: Expr) -> usize {
+    fn insert_new(&mut self, expr: Rc<Expr>) -> usize {
         self.vars.push((false, expr));
         self.vars.len() - 1
     }
@@ -372,6 +384,7 @@ impl Galaxy {
                 var_cache
             },
             var_lookup_count: 0,
+            var_size: 0,
             eval_count: 0,
             apply_count: 0,
         })
@@ -398,6 +411,7 @@ impl Galaxy {
             galaxy_id,
             variables: var_cache,
             var_lookup_count: 0,
+            var_size: 0,
             eval_count: 0,
             apply_count: 0,
         })
@@ -426,19 +440,20 @@ impl Galaxy {
         .cloned()
         .collect::<VecDeque<_>>();
 
-        let mut state = Nil;
+        let mut state = Rc::new(Nil);
         while let Some(click) = click_events.pop_front() {
             let (x, y) = click;
-            let event = ap(ap(Cons, Num(x)), Num(y));
+            let event = ap(ap(Rc::new(Cons), Rc::new(Num(x))), Rc::new(Num(y)));
             let (new_state, images) = self.interact(state, event)?;
             error!(
-                "var_cache_len(): {}, var_lookup_count: {}, eval_count: {}, apply_count: {}",
+                "var_cache_len(): {}, var_lookup_count: {}, var_size: {}, eval_count: {}, apply_count: {}",
                 self.variables.vars.len(),
                 self.var_lookup_count,
+                self.var_size,
                 self.eval_count,
                 self.apply_count
             );
-            let _screen = images.into_screen()?;
+            let _screen = images.to_screen()?;
             state = new_state;
         }
         assert_eq!(
@@ -476,7 +491,7 @@ impl Galaxy {
         .cloned()
         .collect::<VecDeque<_>>();
 
-        let mut state = Nil;
+        let mut state = Rc::new(Nil);
         loop {
             let click = if let Some(click) = click_events.pop_front() {
                 click
@@ -486,15 +501,15 @@ impl Galaxy {
             };
             let (x, y) = click;
             info!("Interact with {:?}", (x, y));
-            let event = ap(ap(Cons, Num(x)), Num(y));
-            let (new_state, images) = self.interact(state.clone(), event)?;
-            let screen = images.into_screen()?;
+            let event = ap(ap(Rc::new(Cons), Rc::new(Num(x))), Rc::new(Num(y)));
+            let (new_state, images) = self.interact(state, event)?;
+            let screen = images.to_screen()?;
             screen_sender.send(screen)?;
             state = new_state;
         }
     }
 
-    fn interact(&mut self, state: Expr, event: Expr) -> Result<(Expr, Expr)> {
+    fn interact(&mut self, state: Rc<Expr>, event: Rc<Expr>) -> Result<(Rc<Expr>, Rc<Expr>)> {
         let expr = self.interact_galaxy(state, event)?;
 
         let InteractResult {
@@ -502,7 +517,7 @@ impl Galaxy {
             new_state,
             images,
         } = InteractResult::new(expr)?;
-        if flag == Num(0) {
+        if flag.as_ref() == &Num(0) {
             Ok((new_state, images))
         } else {
             info!("Sending to alien proxy");
@@ -516,19 +531,20 @@ impl Galaxy {
         }
     }
 
-    fn interact_galaxy(&mut self, state: Expr, event: Expr) -> Result<Expr> {
-        let expr = ap(ap(Expr::Var(self.galaxy_id), state), event);
+    fn interact_galaxy(&mut self, state: Rc<Expr>, event: Rc<Expr>) -> Result<Rc<Expr>> {
+        let expr = ap(ap(Rc::new(Expr::Var(self.galaxy_id)), state), event);
         self.eval(expr)
     }
 
-    fn eval_galaxy(&mut self) -> Result<Expr> {
+    fn eval_galaxy(&mut self) -> Result<Rc<Expr>> {
         self.eval_var(self.galaxy_id)
     }
 
-    fn eval_var(&mut self, id: usize) -> Result<Expr> {
+    fn eval_var(&mut self, id: usize) -> Result<Rc<Expr>> {
         trace!("eval var: {}", id);
         self.var_lookup_count += 1;
         let (evaluated, expr) = self.variables.lookup(id);
+        self.var_size += expr.size();
         if evaluated {
             Ok(expr)
         } else {
@@ -538,116 +554,116 @@ impl Galaxy {
         }
     }
 
-    fn eval(&mut self, mut expr: Expr) -> Result<Expr> {
+    fn eval(&mut self, mut expr: Rc<Expr>) -> Result<Rc<Expr>> {
         self.eval_count += 1;
         loop {
-            match expr {
+            match expr.as_ref() {
                 Ap(left, right, false) => {
-                    expr = self.apply(*left, *right)?;
+                    expr = self.apply(left.clone(), right.clone())?;
                 }
-                e @ Ap(_, _, true) => {
-                    return Ok(e);
+                Ap(_, _, true) => {
+                    return Ok(expr);
                 }
                 Var(n) => {
-                    return self.eval_var(n);
+                    return self.eval_var(*n);
                 }
-                x => {
-                    return Ok(x);
+                _ => {
+                    return Ok(expr);
                 }
             }
         }
     }
 
-    fn apply(&mut self, f: Expr, x0: Expr) -> Result<Expr> {
-        fn evaled_ap(e0: Expr, e1: Expr) -> Result<Expr> {
-            Ok(Ap(Box::new(e0), Box::new(e1), true))
+    fn apply(&mut self, f: Rc<Expr>, x0: Rc<Expr>) -> Result<Rc<Expr>> {
+        fn evaled_ap(e0: Rc<Expr>, e1: Rc<Expr>) -> Result<Rc<Expr>> {
+            Ok(Rc::new(Ap(e0, e1, true)))
+        }
+
+        fn ok(e: Expr) -> Result<Rc<Expr>> {
+            Ok(Rc::new(e))
         }
 
         self.apply_count += 1;
 
         trace!("apply: f: {:?}, x0: {:?}", f, x0);
-        match self.eval(f)? {
+        match self.eval(f.clone())?.as_ref() {
             Num(_) => bail!("can not apply: nuber"),
-            Neg => match self.eval(x0)? {
-                Num(n) => Ok(Num(-n)),
+            Neg => match self.eval(x0)?.as_ref() {
+                Num(n) => ok(Num(-n)),
                 _ => bail!("can not apply: neg"),
             },
-            Inc => match self.eval(x0)? {
-                Num(n) => Ok(Num(n + 1)),
+            Inc => match self.eval(x0)?.as_ref() {
+                Num(n) => ok(Num(n + 1)),
                 _ => bail!("can not apply: inc"),
             },
-            Dec => match self.eval(x0)? {
-                Num(n) => Ok(Num(n - 1)),
+            Dec => match self.eval(x0)?.as_ref() {
+                Num(n) => ok(Num(n - 1)),
                 _ => bail!("can not apply: dec"),
             },
             I => self.eval(x0),
             // ap car x2 = ap x2 t
-            Car => self.apply(x0, T),
-            Cdr => self.apply(x0, F),
+            Car => self.apply(x0, Rc::new(T)),
+            Cdr => self.apply(x0, Rc::new(F)),
             // Avoid recursion
             // Car => Ok(ap(x0, T)),
             // Cdr => Ok(ap(x0, F)),
-            Nil => Ok(T),
-            Isnil => match self.eval(x0)? {
-                Nil => Ok(T),
-                _ => Ok(F),
+            Nil => Ok(Rc::new(T)),
+            Isnil => match self.eval(x0)?.as_ref() {
+                Nil => Ok(Rc::new(T)),
+                _ => Ok(Rc::new(F)),
             },
             Ap(exp, e0, _) => {
-                let (e0, e1): (Expr, Expr) = (*e0, x0); // For readability.
-                match self.eval(*exp)? {
-                    Add => match (self.eval(e0)?, self.eval(e1)?) {
-                        (Num(n0), Num(n1)) => Ok(Num(n0 + n1)),
+                let (e0, e1): (Rc<Expr>, Rc<Expr>) = (e0.clone(), x0); // For readability.
+                match self.eval(exp.clone())?.as_ref() {
+                    Add => match (self.eval(e0)?.as_ref(), self.eval(e1)?.as_ref()) {
+                        (Num(n0), Num(n1)) => ok(Num(n0 + n1)),
                         _ => bail!("can not apply: add"),
                     },
-                    Mul => match (self.eval(e0)?, self.eval(e1)?) {
-                        (Num(n0), Num(n1)) => Ok(Num(n0 * n1)),
+                    Mul => match (self.eval(e0)?.as_ref(), self.eval(e1)?.as_ref()) {
+                        (Num(n0), Num(n1)) => Ok(Rc::new(Num(n0 * n1))),
                         // _ => bail!("can not apply: mul"),
                         (x, y) => bail!("can not apply: mul: e0: {:?}, e1: {:?}", x, y),
                     },
-                    Div => match (self.eval(e0)?, self.eval(e1)?) {
-                        (Num(n0), Num(n1)) => Ok(Num(n0 / n1)),
+                    Div => match (self.eval(e0)?.as_ref(), self.eval(e1)?.as_ref()) {
+                        (Num(n0), Num(n1)) => ok(Num(n0 / n1)),
                         _ => bail!("can not apply: div"),
                     },
-                    Eq => match (self.eval(e0)?, self.eval(e1)?) {
+                    Eq => match (self.eval(e0)?.as_ref(), self.eval(e1)?.as_ref()) {
                         (Num(n0), Num(n1)) => {
                             if n0 == n1 {
-                                Ok(T)
+                                ok(T)
                             } else {
-                                Ok(F)
+                                ok(F)
                             }
                         }
                         _ => bail!("can not apply: eq"),
                     },
-                    Lt => match (self.eval(e0)?, self.eval(e1)?) {
+                    Lt => match (self.eval(e0)?.as_ref(), self.eval(e1)?.as_ref()) {
                         (Num(n0), Num(n1)) => {
                             if n0 < n1 {
-                                Ok(T)
+                                ok(T)
                             } else {
-                                Ok(F)
+                                ok(F)
                             }
                         }
                         _ => bail!("can not apply: lt"),
                     },
                     T => self.eval(e0),
                     F => self.eval(e1),
-                    S => evaled_ap(ap(S, e0), e1),
-                    C => evaled_ap(ap(C, e0), e1),
-                    B => evaled_ap(ap(B, e0), e1),
+                    S => evaled_ap(ap(exp.clone(), e0), e1),
+                    C => evaled_ap(ap(exp.clone(), e0), e1),
+                    B => evaled_ap(ap(exp.clone(), e0), e1),
                     // Cons => Ok(ap(ap(Cons, e0), e1)),
                     // Eval cons earger
-                    Cons => Ok(Ap(
-                        Box::new(ap(Cons, self.eval(e0)?)),
-                        Box::new(self.eval(e1)?),
-                        true,
-                    )),
+                    Cons => evaled_ap(ap(Rc::new(Cons), self.eval(e0)?), self.eval(e1)?),
                     Ap(exp, e, _) => {
-                        let (e0, e1, e2): (Expr, Expr, Expr) = (*e, e0, e1);
-                        match self.eval(*exp)? {
+                        let (e0, e1, e2): (Rc<Expr>, Rc<Expr>, Rc<Expr>) = (e.clone(), e0, e1);
+                        match self.eval(exp.clone())?.as_ref() {
                             S => {
                                 // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                                 // ap ap ap s add inc 1   =   3
-                                let e2: Expr = if let Ap(_, _, false) = &e2 {
-                                    Var(self.variables.insert_new(e2))
+                                let e2: Rc<Expr> = if let Ap(_, _, false) = e2.as_ref() {
+                                    Rc::new(Var(self.variables.insert_new(e2)))
                                 } else {
                                     e2
                                 };
@@ -682,19 +698,19 @@ impl Galaxy {
                     _ => bail!("can not apply: ap ap"),
                 }
             }
-            f => evaled_ap(f, x0),
+            _ => evaled_ap(f, x0),
         }
     }
 }
 
-pub fn eval_src(src: &str) -> Result<Expr> {
+pub fn eval_src(src: &str) -> Result<Rc<Expr>> {
     // let exp = parse_src(src)?;
     // eval(exp)
     let mut galaxy = Galaxy::new_for_test(src)?;
     galaxy.eval_galaxy()
 }
 
-pub fn eval_galaxy_src(src: &str) -> Result<Expr> {
+pub fn eval_galaxy_src(src: &str) -> Result<Rc<Expr>> {
     let mut galaxy = Galaxy::new(src)?;
     galaxy.eval_galaxy()
 }
@@ -737,157 +753,171 @@ mod tests {
 
     #[test]
     fn parse_test() -> Result<()> {
-        assert_eq!(parse_src("1")?, Num(1));
-        assert_eq!(parse_src("add")?, Add);
-        assert_eq!(parse_src("ap ap add 1 2")?, ap(ap(Add, Num(1)), Num(2)));
-        assert_eq!(parse_src("ap ap eq 1 2")?, ap(ap(Eq, Num(1)), Num(2)));
+        assert_eq!(parse_src("1")?.as_ref(), &Num(1));
+        assert_eq!(parse_src("add")?.as_ref(), &Add);
+        assert_eq!(
+            parse_src("ap ap add 1 2")?,
+            ap(ap(Rc::new(Add), Rc::new(Num(1))), Rc::new(Num(2)))
+        );
+        assert_eq!(
+            parse_src("ap ap eq 1 2")?,
+            ap(ap(Rc::new(Eq), Rc::new(Num(1))), Rc::new(Num(2)))
+        );
         assert!(parse_src("add 1").is_err());
         Ok(())
     }
 
     #[test]
     fn eval_test() -> Result<()> {
-        // add
-        assert_eq!(eval_src("ap ap add 1 2")?, Num(3));
-        assert_eq!(eval_src("ap ap add 3 ap ap add 1 2")?, Num(6));
-
-        // eq
-        assert_eq!(eval_src("ap ap eq 1 1")?, T);
-        assert_eq!(eval_src("ap ap eq 1 2")?, F);
-
-        // mul
-        assert_eq!(eval_src("ap ap mul 2 4")?, Num(8));
-        assert_eq!(eval_src("ap ap add 3 ap ap mul 2 4")?, Num(11));
-
-        // div
-        assert_eq!(eval_src("ap ap div 4 2")?, Num(2));
-        assert_eq!(eval_src("ap ap div 4 3")?, Num(1));
-        assert_eq!(eval_src("ap ap div 4 4")?, Num(1));
-        assert_eq!(eval_src("ap ap div 4 5")?, Num(0));
-        assert_eq!(eval_src("ap ap div 5 2")?, Num(2));
-        assert_eq!(eval_src("ap ap div 6 -2")?, Num(-3));
-        assert_eq!(eval_src("ap ap div 5 -3")?, Num(-1));
-        assert_eq!(eval_src("ap ap div -5 3")?, Num(-1));
-        assert_eq!(eval_src("ap ap div -5 -3")?, Num(1));
-
-        // lt
-        assert_eq!(eval_src("ap ap lt 0 -1")?, F);
-        assert_eq!(eval_src("ap ap lt 0 0")?, F);
-        assert_eq!(eval_src("ap ap lt 0 1")?, T);
-
+        for (src, expr) in &[
+            // add
+            ("ap ap add 1 2", Num(3)),
+            ("ap ap add 3 ap ap add 1 2", Num(6)),
+            // eq
+            ("ap ap eq 1 1", T),
+            ("ap ap eq 1 2", F),
+            // mul
+            ("ap ap mul 2 4", Num(8)),
+            ("ap ap add 3 ap ap mul 2 4", Num(11)),
+            // div
+            ("ap ap div 4 2", Num(2)),
+            ("ap ap div 4 3", Num(1)),
+            ("ap ap div 4 4", Num(1)),
+            ("ap ap div 4 5", Num(0)),
+            ("ap ap div 5 2", Num(2)),
+            ("ap ap div 6 -2", Num(-3)),
+            ("ap ap div 5 -3", Num(-1)),
+            ("ap ap div -5 3", Num(-1)),
+            ("ap ap div -5 -3", Num(1)),
+            // lt
+            ("ap ap lt 0 -1", F),
+            ("ap ap lt 0 0", F),
+            ("ap ap lt 0 1", T),
+        ] {
+            assert_eq!(eval_src(src)?.as_ref(), expr);
+        }
         Ok(())
     }
 
     #[test]
     fn eval_unary_test() -> Result<()> {
-        // neg
-        assert_eq!(eval_src("ap neg 0")?, Num(0));
-        assert_eq!(eval_src("ap neg 1")?, Num(-1));
-        assert_eq!(eval_src("ap neg -1")?, Num(1));
-        assert_eq!(eval_src("ap ap add ap neg 1 2")?, Num(1));
-
-        // inc
-        assert_eq!(eval_src("ap inc 0")?, Num(1));
-        assert_eq!(eval_src("ap inc 1")?, Num(2));
-
-        // dec
-        assert_eq!(eval_src("ap dec 0")?, Num(-1));
-        assert_eq!(eval_src("ap dec 1")?, Num(0));
-
+        for (src, expr) in &[
+            // neg
+            ("ap neg 0", Num(0)),
+            ("ap neg 1", Num(-1)),
+            ("ap neg -1", Num(1)),
+            ("ap ap add ap neg 1 2", Num(1)),
+            // inc
+            ("ap inc 0", Num(1)),
+            ("ap inc 1", Num(2)),
+            // dec
+            ("ap dec 0", Num(-1)),
+            ("ap dec 1", Num(0)),
+        ] {
+            assert_eq!(eval_src(src)?.as_ref(), expr);
+        }
         Ok(())
     }
 
     #[test]
     fn eval_s_c_b_test() -> Result<()> {
-        // s
-        assert_eq!(eval_src("ap ap ap s add inc 1")?, Num(3));
-        assert_eq!(eval_src("ap ap ap s mul ap add 1 6")?, Num(42));
-
-        // c
-        assert_eq!(eval_src("ap ap ap c add 1 2")?, Num(3));
-
-        // b
-        // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
-        // ap ap ap b inc dec x0   =   x0
-        assert_eq!(eval_src("ap ap ap b neg neg 1")?, Num(1));
+        for (src, expr) in &[
+            // s
+            ("ap ap ap s add inc 1", Num(3)),
+            ("ap ap ap s mul ap add 1 6", Num(42)),
+            // c
+            ("ap ap ap c add 1 2", Num(3)),
+            // b
+            // ap ap ap b x0 x1 x2   =   ap x0 ap x1 x2
+            // ap ap ap b inc dec x0   =   x0
+            ("ap ap ap b neg neg 1", Num(1)),
+        ] {
+            assert_eq!(eval_src(src)?.as_ref(), expr);
+        }
         Ok(())
     }
 
     #[test]
     fn eval_t_f_i_test() -> Result<()> {
-        // t
-        // ap ap t x0 x1   =   x0
-        // ap ap t 1 5   =   1
-        // ap ap t t i   =   t
-        // ap ap t t ap inc 5   =   t
-        // ap ap t ap inc 5 t   =   6
-        assert_eq!(eval_src("ap ap t 1 5")?, Num(1));
-        assert_eq!(eval_src("ap ap t t 1")?, T);
-        assert_eq!(eval_src("ap ap t t ap inc 5")?, T);
-        assert_eq!(eval_src("ap ap t ap inc 5 t")?, Num(6));
-
-        // f
-        assert_eq!(eval_src("ap ap f 1 2")?, Num(2));
-
-        // i
-        assert_eq!(eval_src("ap i 0")?, Num(0));
-        assert_eq!(eval_src("ap i i")?, I);
-
+        for (src, expr) in &[
+            // t
+            // ap ap t x0 x1   =   x0
+            // ap ap t 1 5   =   1
+            // ap ap t t i   =   t
+            // ap ap t t ap inc 5   =   t
+            // ap ap t ap inc 5 t   =   6
+            ("ap ap t 1 5", Num(1)),
+            ("ap ap t t 1", T),
+            ("ap ap t t ap inc 5", T),
+            ("ap ap t ap inc 5 t", Num(6)),
+            // f
+            ("ap ap f 1 2", Num(2)),
+            // i
+            ("ap i 0", Num(0)),
+            ("ap i i", I),
+        ] {
+            assert_eq!(eval_src(src)?.as_ref(), expr);
+        }
         Ok(())
     }
 
     #[test]
     fn eval_cons_test() -> Result<()> {
-        // car, cdr, cons
+        for (src, expr) in &[
+            // car, cdr, cons
 
-        // car
-        // ap car ap ap cons x0 x1   =   x0
-        // ap car x2   =   ap x2 t
-        assert_eq!(eval_src("ap car ap ap cons 0 1")?, Num(0));
-        assert_eq!(eval_src("ap cdr ap ap cons 0 1")?, Num(1));
-
-        // nil
-        // ap nil x0   =   t
-        assert_eq!(eval_src("ap nil 1")?, T);
-
-        // isnil
-        assert_eq!(eval_src("ap isnil nil")?, T);
-        assert_eq!(eval_src("ap isnil 1")?, F);
-
+            // car
+            // ap car ap ap cons x0 x1   =   x0
+            // ap car x2   =   ap x2 t
+            ("ap car ap ap cons 0 1", Num(0)),
+            ("ap cdr ap ap cons 0 1", Num(1)),
+            // nil
+            // ap nil x0   =   t
+            ("ap nil 1", T),
+            // isnil
+            ("ap isnil nil", T),
+            ("ap isnil 1", F),
+        ] {
+            assert_eq!(eval_src(src)?.as_ref(), expr);
+        }
         Ok(())
     }
 
     #[test]
     fn eval_galaxy_src_test() -> Result<()> {
-        let src = ":1 = 2
-    galaxy = :1
-    ";
-        assert_eq!(eval_galaxy_src(src)?, Num(2));
-
-        let src = ":1 = 2
+        for (src, expr) in &[
+            (
+                ":1 = 2
+    galaxy = :1",
+                Num(2),
+            ),
+            (
+                ":1 = 2
     :2 = :1
-    galaxy = :2
-    ";
-        assert_eq!(eval_galaxy_src(src)?, Num(2));
-
-        let src = ":1 = 2
+    galaxy = :2",
+                Num(2),
+            ),
+            (
+                ":1 = 2
     :2 = ap inc :1
-    galaxy = :2
-    ";
-        assert_eq!(eval_galaxy_src(src)?, Num(3));
-
-        let src = ":1 = 2
+    galaxy = :2",
+                Num(3),
+            ),
+            (
+                ":1 = 2
     :2 = ap ap add 1 :1
-    galaxy = :2
-    ";
-        assert_eq!(eval_galaxy_src(src)?, Num(3));
-
-        let src = ":1 = ap add 1
+    galaxy = :2",
+                Num(3),
+            ),
+            (
+                ":1 = ap add 1
     :2 = ap :1 2
-    galaxy = :2
-    ";
-        assert_eq!(eval_galaxy_src(src)?, Num(3));
-
+    galaxy = :2",
+                Num(3),
+            ),
+        ] {
+            assert_eq!(eval_galaxy_src(src)?.as_ref(), expr);
+        }
         Ok(())
     }
 
@@ -895,18 +925,11 @@ mod tests {
     fn eval_recursive_func_test() -> Result<()> {
         // From video part2
         // https://www.youtube.com/watch?v=oU4RAEQCTDE
-        let src = ":1 = ap f :1
-    :2 = ap :1 42
-    galaxy = :2
-    ";
-        assert_eq!(eval_galaxy_src(src)?, Num(42));
-
         let src = ":1 = ap :1 1
     :2 = ap ap t 42 :1
     galaxy = :2
     ";
-        assert_eq!(eval_galaxy_src(src)?, Num(42));
-
+        assert_eq!(eval_galaxy_src(src)?.as_ref(), &Num(42));
         Ok(())
     }
 
@@ -917,31 +940,39 @@ mod tests {
         let src = std::fs::read_to_string(path)?.trim().to_string();
 
         let mut galaxy = Galaxy::new(&src)?;
-        let res = galaxy.interact_galaxy(Nil, ap(ap(Cons, Num(0)), Num(0)))?;
+        let res = galaxy.interact_galaxy(
+            Rc::new(Nil),
+            ap(ap(Rc::new(Cons), Rc::new(Num(0))), Rc::new(Num(0))),
+        )?;
         assert_eq!(
             format!("{}", Mod::new(res.clone())?),
             "(0, ((0, ((0, nil), (0, (nil, nil)))), ((((-1, -3), ((0, -3), ((1, -3), ((2, -2), ((-2, -1), ((-1, -1), ((0, -1), ((3, -1), ((-3, 0), ((-1, 0), ((1, 0), ((3, 0), ((-3, 1), ((0, 1), ((1, 1), ((2, 1), ((-2, 2), ((-1, 3), ((0, 3), ((1, 3), nil)))))))))))))))))))), (((-7, -3), ((-8, -2), nil)), (nil, nil))), nil)))"
         );
 
         let interact_result = InteractResult::new(res)?;
-        assert_eq!(interact_result.flag, Num(0));
+        assert_eq!(interact_result.flag.as_ref(), &Num(0));
         Ok(())
     }
 
     #[test]
     fn into_vec_test() -> Result<()> {
-        assert_eq!(Nil.into_vec()?, Vec::new());
-        assert_eq!(parse_src("ap ap cons 1 nil")?.into_vec()?, vec![Num(1)]);
-        assert_eq!(
-            parse_src("ap ap cons 1 ap ap cons 2 nil")?.into_vec()?,
-            vec![Num(1), Num(2)]
-        );
-        assert_eq!(
-            parse_src("ap ap cons 1 ap ap cons 2 ap ap cons 3 nil")?.into_vec()?,
-            vec![Num(1), Num(2), Num(3)]
-        );
-        assert_eq!(parse_src("ap ap cons 0 nil")?.into_vec()?, vec![Num(0)]);
-
+        for (src, v) in &[
+            ("nil", vec![]),
+            ("ap ap cons 1 nil", vec![Num(1)]),
+            ("ap ap cons 1 ap ap cons 2 nil", vec![Num(1), Num(2)]),
+            (
+                "ap ap cons 1 ap ap cons 2 ap ap cons 3 nil",
+                vec![Num(1), Num(2), Num(3)],
+            ),
+        ] {
+            assert_eq!(
+                parse_src(src)?.to_vec()?,
+                v.into_iter()
+                    .cloned()
+                    .map(|e| Rc::new(e))
+                    .collect::<Vec<_>>()
+            );
+        }
         Ok(())
     }
 
@@ -977,14 +1008,15 @@ mod tests {
 
     #[test]
     fn demodulate_test() -> Result<()> {
-        assert_eq!("010".demodulate()?, Num(0));
-        assert_eq!("01100001".demodulate()?, Num(1));
-        assert_eq!("10100001".demodulate()?, Num(-1));
-        assert_eq!("110000".demodulate()?, ap(ap(Cons, Nil), Nil));
-        assert_eq!(
-            "1101100001110110001000".demodulate()?,
-            ap(ap(Cons, Num(1)), ap(ap(Cons, Num(2)), Nil))
-        );
+        for (s, expr) in &[
+            ("010", "0"),
+            ("01100001", "1"),
+            ("10100001", "-1"),
+            ("110000", "ap ap cons nil nil"),
+            ("1101100001110110001000", "ap ap cons 1 ap ap cons 2 nil"),
+        ] {
+            assert_eq!(s.demodulate()?, parse_src(expr)?);
+        }
         Ok(())
     }
 }

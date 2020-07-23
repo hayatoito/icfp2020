@@ -19,8 +19,10 @@ pub async fn interact(port: u16) -> Result<()> {
     let (click_sender, click_receiver) = mpsc::channel();
     let (screen_sender, screen_receiver) = mpsc::channel();
 
-    let mut galaxy = galaxy::Galaxy::new(&src)?;
-    tokio::task::spawn_blocking(move || galaxy.play(click_receiver, screen_sender));
+    tokio::task::spawn_blocking(move || {
+        let mut galaxy = galaxy::Galaxy::new(&src).unwrap();
+        galaxy.play(click_receiver, screen_sender).unwrap();
+    });
 
     let screen_data = Arc::new(Mutex::new(Screen::new()));
 
@@ -42,9 +44,7 @@ pub async fn interact(port: u16) -> Result<()> {
             debug!("{} {} {}", info.method(), info.path(), info.status());
         }));
 
-    info!("serving at {:?}", addr);
-    println!("Open http://localhost:{}/gamepad.html to play.", port);
-    println!("Put your apikey in task/apikey file, which is not included in Git repository");
+    println!("Open http://localhost:{}/galaxypad.html to play.", port);
     warp::serve(route).run(addr).await;
     Ok(())
 }
