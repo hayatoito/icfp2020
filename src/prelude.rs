@@ -6,7 +6,8 @@ pub use std::path::{Path, PathBuf};
 pub use std::rc::Rc;
 
 pub type Click = (i64, i64);
-pub type Screen = Vec<(i64, i64)>;
+pub type Image = Vec<(i64, i64)>;
+pub type Screen = Vec<Image>;
 
 pub type ScreenSender = std::sync::mpsc::Sender<Screen>;
 pub type ScreenReceiver = std::sync::mpsc::Receiver<Screen>;

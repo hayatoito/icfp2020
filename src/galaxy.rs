@@ -1,34 +1,13 @@
 use crate::api;
 use crate::prelude::*;
-pub use log::*;
+use log::*;
+use regex::Regex;
 use std::convert::From;
 
-use regex::Regex;
-
-fn tokenize(src: &str) -> Vec<&str> {
-    src.split_whitespace().collect()
-}
-
-fn parse_src(src: &str) -> Result<Expr> {
-    let tokens = tokenize(src);
-    let parse_result = parse(&tokens)?;
-    ensure!(
-        parse_result.tokens.is_empty(),
-        format!("tokens are not consumed: {:?}", parse_result.tokens)
-    );
-    Ok(parse_result.exp)
-}
-
-struct ParseResult<'a> {
-    exp: Expr,
-    tokens: &'a [&'a str],
-}
-
-// #[derive(PartialEq, Clone, Debug)]
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum Expr {
     Ap(Box<Expr>, Box<Expr>, bool),
-    Var(u64),
+    Var(usize),
     Num(i64),
     Add,
     Mul,
@@ -58,33 +37,23 @@ fn ap(e0: Expr, e1: Expr) -> Expr {
     Ap(Box::new(e0), Box::new(e1), false)
 }
 
-impl std::fmt::Debug for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Ap(e0, e1, _) => write!(f, "Ap({:?}, {:?})", e0, e1),
-            Var(id) => write!(f, "Var({})", id),
-            Num(n) => write!(f, "Num({})", n),
-            Add => write!(f, "Add"),
-            Mul => write!(f, "Mul"),
-            Div => write!(f, "Div"),
-            Eq => write!(f, "Eq"),
-            Lt => write!(f, "Lt"),
-            Neg => write!(f, "Neg"),
-            Inc => write!(f, "Inc"),
-            Dec => write!(f, "Dec"),
-            S => write!(f, "S"),
-            C => write!(f, "C"),
-            B => write!(f, "B"),
-            T => write!(f, "T"),
-            F => write!(f, "F"),
-            I => write!(f, "I"),
-            Cons => write!(f, "Cons"),
-            Car => write!(f, "Car"),
-            Cdr => write!(f, "Cdr"),
-            Nil => write!(f, "Nil"),
-            Isnil => write!(f, "Isnil"),
-        }
-    }
+fn tokenize(src: &str) -> Vec<&str> {
+    src.split_whitespace().collect()
+}
+
+fn parse_src(src: &str) -> Result<Expr> {
+    let tokens = tokenize(src);
+    let parse_result = parse(&tokens)?;
+    ensure!(
+        parse_result.tokens.is_empty(),
+        format!("tokens are not consumed: {:?}", parse_result.tokens)
+    );
+    Ok(parse_result.exp)
+}
+
+struct ParseResult<'a> {
+    exp: Expr,
+    tokens: &'a [&'a str],
 }
 
 fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
@@ -122,7 +91,7 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
                 "isnil" => Isnil,
                 x => {
                     if x.as_bytes()[0] == b':' {
-                        let var_id: u64 = x[1..].parse()?;
+                        let var_id: usize = x[1..].parse()?;
                         debug!("parsed var_id: {}", var_id);
                         Var(var_id)
                     } else {
@@ -137,210 +106,96 @@ fn parse<'a>(tokens: &'a [&'a str]) -> Result<ParseResult<'a>> {
     }
 }
 
-#[derive(PartialEq, Clone, Debug)]
-struct InteractResult {
-    flag: Expr,
-    new_state: Expr,
-    images: Expr,
-}
-
-impl InteractResult {
-    fn new(expr: Expr) -> Result<InteractResult> {
-        let destruct = list_destruction(expr)?;
-        assert_eq!(destruct.len(), 3);
-        let mut iter = destruct.into_iter();
-        Ok(InteractResult {
-            flag: iter.next().unwrap(),
-            new_state: iter.next().unwrap(),
-            images: iter.next().unwrap(),
-        })
-    }
-}
-
-pub fn bench() -> Result<()> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("task/galaxy.txt");
-    let src = std::fs::read_to_string(path)?.trim().to_string();
-    let mut galaxy = Galaxy::new(&src)?;
-    galaxy.bench()
-}
-
-fn list_destruction(expr: Expr) -> Result<Vec<Expr>> {
-    fn internal(expr: Expr) -> Result<Option<(Expr, Expr)>> {
-        // it is ap ap cons flag ap ap cons newState ap ap cons data nil
-
-        // List construction
-        // https://message-from-space.readthedocs.io/en/latest/message30.html
-
-        // ( x0 , x1 , x2 )   =   ap ap cons x0 ap ap cons x1 ap ap cons x2 nil
-        // ( flag , new_state , images )   =   ap ap cons x0 ap ap cons x1 ap ap cons x2 nil
-
-        // https://message-from-space.readthedocs.io/en/latest/message13.html
-        match expr {
+impl Expr {
+    fn destruct_cons(self) -> Result<Option<(Expr, Expr)>> {
+        match self {
             Nil => Ok(None),
-            // 1. [ap ap cons 1 nil]
-            // 2. [ap ap cons 1 ap ap cons 2 nil]
-            Ap(x0, x1, _) => match *x0 {
-                // 1. ap [ap cons 1] [nil]
-                // 2. ap [ap cons 1 ap ap cons 2] [nil]
-                Ap(x0, x2, _) => match *x0 {
-                    // 1. ap ap [cons] [1] [nil]
-                    // 2. ap ap [cons] [1] [ap ap cons 2 nil]
-                    Cons => {
-                        Ok(Some((*x2, *x1)))
-                        // let mut post = internal(x1.expr)?;
-                        // post.push(x2.expr);
-                        // Ok(post)
-                    }
-                    _ => bail!("can not list destruction"),
-                },
-                _ => bail!("can not list destruction"),
+            Ap(a, cdr, _) => match *a {
+                Ap(cons, car, _) if *cons == Cons => Ok(Some((*car, *cdr))),
+                _ => bail!("invalid structure"),
             },
-            _ => bail!("can not list destruction"),
+            _ => bail!("invalid structure"),
         }
     }
 
-    let mut expr = expr;
-    let mut list = Vec::new();
-    while let Some((x, xs)) = internal(expr)? {
-        list.push(x);
-        expr = xs;
+    fn into_vec(self) -> Result<Vec<Expr>> {
+        let mut expr = self;
+        let mut list = Vec::new();
+        while let Some((x, xs)) = expr.destruct_cons()? {
+            list.push(x);
+            expr = xs;
+        }
+        Ok(list)
     }
-    Ok(list)
-}
 
-fn images_to_points(images: Expr) -> Result<Screen> {
-    let mut points = Vec::new();
-    for p in list_destruction(images)? {
-        for p in list_destruction(p)? {
-            // Ap(Ap(Cons, Num(-1)), Num(-3))
-            if let Ap(x, y, _) = p {
-                if let Ap(c, x, _) = *x {
-                    if let (Cons, Num(x), Num(y)) = (*c, *x, *y) {
-                        points.push((x, y));
-                    } else {
-                        bail!("can not parse point")
-                    }
+    fn into_screen(self) -> Result<Screen> {
+        let mut screen = Screen::new();
+        for image_expr in self.into_vec()? {
+            let mut image = Image::new();
+            for p in image_expr.into_vec()? {
+                if let Some((Num(x), Num(y))) = p.destruct_cons()? {
+                    image.push((x, y));
                 } else {
-                    bail!("can not parse point")
+                    bail!("invalid point structure")
                 }
-            } else {
-                bail!("can not parse point")
             }
+            screen.push(image)
         }
+        Ok(screen)
     }
-    Ok(points)
 }
 
-// When it's expecting a number, seeing 11 as the first two bits creates
-// a deeper list. After a number has finished, and the list level is
-// greater than 0, a 11 continues a list, and a 00 ends the list,
-// returning to a lower level The behaviour still seems to be undefined
-// for seeing 00 when it expects a number
+trait Demodulatable {
+    fn demodulate(self) -> Result<Expr>;
+}
 
-// 0:  1
-// 1:  1010
-
-// 11: deeper list start (ap ap cons)
-// 00: deeper list end  (nil)
-
-// "[" === "ap ap cons"
-
-// "(" === 11
-// "," === 11
-// ")" === 00 (nil)
-
-// mod cons
-// ap mod nil   =   [nil]
-// nil
-// 00
-
-// ap mod ap ap cons nil nil   =   [ap ap cons nil nil]
-// [  nil nil
-// 11 00  00
-
-// ap mod ap ap cons 0 nil   =   [ap ap cons 0 nil]
-// [  0  nil
-// 11 010 00
-
-// ap mod ap ap cons 1 2   =   [ap ap cons 1 2]
-// [  1        2
-// 11 01100001 01100010
-
-// ap mod ap ap cons 1 ap ap cons 2 nil   =   [ap ap cons 1 ap ap cons 2 nil]
-// [  1        [  2        nil
-// 11 01100001 11 01100010 00
-
-// ap mod ( 1 , 2 )   =   [( 1 , 2 )]
-// [  1        [  2        nil
-// 11 01100001 11 01100010 00
-
-// ap mod ( 1 , ( 2 , 3 ) , 4 )   =   [( 1 , ( 2 , 3 ) , 4 )]
-// (  1        ,   ()    2       ,  3         )  ,   4         )
-// 11 01100001 11  11   01100010 11 01100011  00 11  01100100  00
-fn demodulate(s: &str) -> Result<Expr> {
-    let mut pos = 0;
-    let mut tokens = String::new();
-    while pos < s.len() {
-        match &s[pos..(pos + 2)] {
-            "00" => {
-                tokens.push_str(" nil");
-                pos += 2;
-            }
-            "11" => {
-                tokens.push_str(" ap ap cons");
-                pos += 2;
-            }
-            sign => {
-                pos += 2;
-                if &s[pos..=pos] == "0" {
-                    tokens.push_str(" 0");
-                    pos += 1;
-                } else {
-                    for prefix in MOD_NUM_PREFIX.iter() {
-                        if s[pos..].starts_with(prefix) {
-                            pos += prefix.len();
-                            let width = (prefix.len() - 1) * 4;
-                            let rep = &s[pos..(pos + width)];
-                            pos += width;
-                            let mut num = i64::from_str_radix(rep, 2)?;
-                            if sign == "10" {
-                                num = -num;
+impl Demodulatable for &str {
+    // 11: ap ap cons
+    // 00: nil
+    fn demodulate(self) -> Result<Expr> {
+        let s: &str = self;
+        let mut pos = 0;
+        let mut tokens = String::new();
+        while pos < s.len() {
+            match &s[pos..(pos + 2)] {
+                "00" => {
+                    tokens.push_str(" nil");
+                    pos += 2;
+                }
+                "11" => {
+                    tokens.push_str(" ap ap cons");
+                    pos += 2;
+                }
+                sign => {
+                    pos += 2;
+                    if &s[pos..=pos] == "0" {
+                        tokens.push_str(" 0");
+                        pos += 1;
+                    } else {
+                        for prefix in MOD_NUM_PREFIX.iter() {
+                            if s[pos..].starts_with(prefix) {
+                                pos += prefix.len();
+                                let width = (prefix.len() - 1) * 4;
+                                let rep = &s[pos..(pos + width)];
+                                pos += width;
+                                let mut num = i64::from_str_radix(rep, 2)?;
+                                if sign == "10" {
+                                    num = -num;
+                                }
+                                tokens.push_str(&format!(" {}", num));
+                                break;
                             }
-                            tokens.push_str(&format!(" {}", num));
-                            break;
                         }
                     }
                 }
             }
         }
+        parse_src(&tokens)
     }
-    parse_src(&tokens)
 }
 
-fn cons_car_cdr(e: Expr) -> Result<(Expr, Expr)> {
-    if let Ap(a, cdr, _) = e {
-        if let Ap(b, car, _) = *a {
-            ensure!(*b == Cons, "invalid modulator: not cons");
-            return Ok((*car, *cdr));
-        }
-    }
-    bail!("invalid modular")
-}
-
-// TODO: Avoid stackoverlow?
-fn modulate_expr(e: Expr) -> Result<String> {
-    match e {
-        Nil => Ok("00".to_string()),
-        Num(n) => Ok(modulate_num(n)),
-        e => {
-            let (car, cdr) = cons_car_cdr(e)?;
-            let mut modulated = "11".to_string();
-            modulated.push_str(&modulate_expr(car)?);
-            modulated.push_str(&modulate_expr(cdr)?);
-            Ok(modulated)
-        }
-    }
+trait Modulatable {
+    fn modulate(self) -> Result<String>;
 }
 
 const MOD_NUM_PREFIX: [&str; 16] = [
@@ -362,47 +217,163 @@ const MOD_NUM_PREFIX: [&str; 16] = [
     "11111111111111110",
 ];
 
-fn modulate_num(n: i64) -> String {
-    let mut modulated = String::new();
-    if n == 0 {
-        return "010".to_string();
-    }
-    if n >= 0 {
-        modulated.push_str("01");
-    } else {
-        modulated.push_str("10");
-    }
+impl Modulatable for i64 {
+    fn modulate(self) -> Result<String> {
+        let n = self;
+        let mut modulated = String::new();
+        if n == 0 {
+            return Ok("010".to_string());
+        }
+        if n >= 0 {
+            modulated.push_str("01");
+        } else {
+            modulated.push_str("10");
+        }
 
-    let n: u128 = (n as i128).abs() as u128;
+        let n: u128 = (self as i128).abs() as u128;
 
-    for (i, prefix) in MOD_NUM_PREFIX.iter().enumerate() {
-        let bits = (i + 1) * 4;
-        if n < ((1 as u128) << bits) {
-            modulated.push_str(prefix);
-            let binary = format!("{:b}", n);
-            modulated.push_str(&format!("{:0>width$}", binary, width = bits));
-            break;
+        for (i, prefix) in MOD_NUM_PREFIX.iter().enumerate() {
+            let bits = (i + 1) * 4;
+            if n < ((1 as u128) << bits) {
+                modulated.push_str(prefix);
+                let binary = format!("{:b}", n);
+                modulated.push_str(&format!("{:0>width$}", binary, width = bits));
+                break;
+            }
+        }
+        Ok(modulated)
+    }
+}
+
+impl Modulatable for Expr {
+    fn modulate(self) -> Result<String> {
+        match self {
+            Nil => Ok("00".to_string()),
+            Num(n) => n.modulate(),
+            e => {
+                let (car, cdr) = e.destruct_cons()?.unwrap();
+                let mut modulated = "11".to_string();
+                modulated.push_str(&car.modulate()?);
+                modulated.push_str(&cdr.modulate()?);
+                Ok(modulated)
+            }
         }
     }
-    modulated
+}
+
+enum Mod {
+    Nil,
+    Num(i64),
+    Cons(Box<Mod>, Box<Mod>),
+}
+
+impl Mod {
+    fn new(e: Expr) -> Result<Mod> {
+        match e {
+            Ap(a, cdr, _) => match *a {
+                Ap(cons, car, _) if *cons == Cons => Ok(Mod::Cons(
+                    Box::new(Mod::new(*car)?),
+                    Box::new(Mod::new(*cdr)?),
+                )),
+                _ => bail!("Invalid mod"),
+            },
+            Num(n) => Ok(Mod::Num(n)),
+            Nil => Ok(Mod::Nil),
+            _ => bail!("Invalid mod"),
+        }
+    }
+}
+
+impl std::fmt::Display for Mod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Mod::Cons(car, cdr) => write!(f, "({}, {})", *car, *cdr),
+            Mod::Num(n) => write!(f, "{}", n),
+            Mod::Nil => write!(f, "nil"),
+        }
+    }
+}
+
+#[derive(PartialEq, Clone, Debug)]
+struct InteractResult {
+    flag: Expr,
+    new_state: Expr,
+    images: Expr,
+}
+
+impl InteractResult {
+    fn new(expr: Expr) -> Result<InteractResult> {
+        let list = expr.into_vec()?;
+        assert_eq!(list.len(), 3);
+        let mut iter = list.into_iter();
+        Ok(InteractResult {
+            flag: iter.next().unwrap(),
+            new_state: iter.next().unwrap(),
+            images: iter.next().unwrap(),
+        })
+    }
+}
+
+pub fn bench() -> Result<()> {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("task/galaxy.txt");
+    let src = std::fs::read_to_string(path)?.trim().to_string();
+    let mut galaxy = Galaxy::new(&src)?;
+    galaxy.bench()
 }
 
 pub(crate) struct Galaxy {
-    galaxy_id: u64,
-    vars: HashMap<u64, (bool, Expr)>,
-    max_var_id: u64,
+    galaxy_id: usize,
+    variables: Variables,
+    var_lookup_count: u64,
+    eval_count: u64,
+    apply_count: u64,
+}
+
+struct Variables {
+    // TODO: Use Rc<Expr> to avoid clone. This requires non trivial changes.
+    vars: Vec<(bool, Expr)>,
+}
+
+impl Variables {
+    fn new() -> Variables {
+        Variables { vars: Vec::new() }
+    }
+
+    fn insert(&mut self, id: usize, expr: Expr) {
+        if self.vars.len() <= id as usize {
+            self.vars.resize((id + 1) as usize, (false, Nil));
+        }
+        assert_eq!(&self.vars[id], &(false, Nil));
+        self.vars[id] = (false, expr);
+    }
+
+    fn insert_evaluated(&mut self, id: usize, expr: Expr) {
+        self.vars[id] = (true, expr);
+    }
+
+    fn lookup(&self, id: usize) -> (bool, Expr) {
+        self.vars[id].clone()
+    }
+
+    fn insert_new(&mut self, expr: Expr) -> usize {
+        self.vars.push((false, expr));
+        self.vars.len() - 1
+    }
 }
 
 impl Galaxy {
     fn new_for_test(src: &str) -> Result<Galaxy> {
         Ok(Galaxy {
             galaxy_id: 1,
-            vars: {
-                let mut vars = HashMap::new();
-                vars.insert(1, (false, parse_src(src)?));
-                vars
+            variables: {
+                let mut var_cache = Variables::new();
+                var_cache.insert(1, parse_src(src)?);
+                var_cache
             },
-            max_var_id: 1,
+            var_lookup_count: 0,
+            eval_count: 0,
+            apply_count: 0,
         })
     }
 
@@ -410,27 +381,25 @@ impl Galaxy {
         let lines = src.trim().split('\n').collect::<Vec<_>>();
         let galaxy_line_re = Regex::new(r"galaxy *= :*(\d+)$").unwrap();
         let cap = galaxy_line_re.captures(lines[lines.len() - 1]).unwrap();
-        let galaxy_id: u64 = cap[1].parse()?;
-        let mut max_var_id = 0;
+        let galaxy_id: usize = cap[1].parse()?;
 
-        let vars = {
-            let mut vars = HashMap::new();
-            let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
+        let mut var_cache = Variables::new();
 
-            for line in lines.iter().take(lines.len() - 1) {
-                let cap = re.captures(line).unwrap();
-                debug!("var: {}", &cap[1]);
-                let var_id = cap[1].parse::<u64>()?;
-                max_var_id = max_var_id.max(var_id);
-                vars.insert(var_id, (false, parse_src(&cap[2])?));
-            }
-            vars
-        };
+        let re = Regex::new(r":(\d+) *= *(.*)$").unwrap();
+
+        for line in lines.iter().take(lines.len() - 1) {
+            let cap = re.captures(line).unwrap();
+            debug!("var: {}", &cap[1]);
+            let id = cap[1].parse::<usize>()?;
+            var_cache.insert(id, parse_src(&cap[2])?);
+        }
 
         Ok(Galaxy {
             galaxy_id,
-            vars,
-            max_var_id,
+            variables: var_cache,
+            var_lookup_count: 0,
+            eval_count: 0,
+            apply_count: 0,
         })
     }
 
@@ -461,15 +430,21 @@ impl Galaxy {
         while let Some(click) = click_events.pop_front() {
             let (x, y) = click;
             let event = ap(ap(Cons, Num(x)), Num(y));
-            let (new_state, images) = self.interact(state.clone(), event)?;
-            let _new_points = images_to_points(images)?
-                .into_iter()
-                .collect::<HashSet<_>>();
+            let (new_state, images) = self.interact(state, event)?;
+            error!(
+                "var_cache_len(): {}, var_lookup_count: {}, eval_count: {}, apply_count: {}",
+                self.variables.vars.len(),
+                self.var_lookup_count,
+                self.eval_count,
+                self.apply_count
+            );
+            let _screen = images.into_screen()?;
             state = new_state;
         }
-        println!("bench ends: state: {:?}", state);
-        assert_eq!(format!("{:?}", state),
-                   "Ap(Ap(Cons, Num(2)), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Ap(Ap(Cons, Num(-1)), Nil))), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil))))");
+        assert_eq!(
+            format!("{}", Mod::new(state)?),
+            "(2, ((1, (-1, nil)), (0, (nil, nil))))"
+        );
         Ok(())
     }
 
@@ -479,7 +454,6 @@ impl Galaxy {
         screen_sender: ScreenSender,
     ) -> Result<()> {
         let mut click_events = [
-            // 8 times clicks at (0, 0)
             (0, 0),
             (0, 0),
             (0, 0),
@@ -488,17 +462,13 @@ impl Galaxy {
             (0, 0),
             (0, 0),
             (0, 0),
-            // click crosshair
             (8, 4),
             (2, -8),
             (3, 6),
             (0, -14),
             (-4, 10),
-            // many points 2 <= x <= 17, -7 <= y <= 8
             (9, -3),
-            // many points -12 <= x <= 3, 0 <= y <=15
             (-4, 10),
-            // many points -2 <= x <= 13, -4 <= y <=11
             (-2, -4),
             // garaxy appears -> alien send
         ]
@@ -518,8 +488,8 @@ impl Galaxy {
             info!("Interact with {:?}", (x, y));
             let event = ap(ap(Cons, Num(x)), Num(y));
             let (new_state, images) = self.interact(state.clone(), event)?;
-            let new_points = images_to_points(images)?.into_iter().collect::<Vec<_>>();
-            screen_sender.send(new_points)?;
+            let screen = images.into_screen()?;
+            screen_sender.send(screen)?;
             state = new_state;
         }
     }
@@ -536,11 +506,11 @@ impl Galaxy {
             Ok((new_state, images))
         } else {
             info!("Sending to alien proxy");
-            let modulated = modulate_expr(images)?;
+            let modulated = images.modulate()?;
             debug!("modulated: {:?}", modulated);
             let alien_response = api::send(modulated)?;
             debug!("raw alien_response: {:?}", alien_response);
-            let event = demodulate(&alien_response.trim().to_string())?;
+            let event = alien_response.trim().demodulate()?;
             debug!("demodulated alien_response: {:?}", event);
             self.interact(new_state, event)
         }
@@ -555,26 +525,21 @@ impl Galaxy {
         self.eval_var(self.galaxy_id)
     }
 
-    fn eval_var(&mut self, id: u64) -> Result<Expr> {
+    fn eval_var(&mut self, id: usize) -> Result<Expr> {
         trace!("eval var: {}", id);
-        let (evaluated, expr) = self.vars[&id].clone();
+        self.var_lookup_count += 1;
+        let (evaluated, expr) = self.variables.lookup(id);
         if evaluated {
             Ok(expr)
         } else {
             let res = self.eval(expr)?;
-            assert!(self.vars.insert(id, (true, res.clone())).is_some());
+            self.variables.insert_evaluated(id, res.clone());
             Ok(res)
         }
     }
 
-    fn add_new_var(&mut self, expr: Expr) -> u64 {
-        self.max_var_id += 1;
-        let new_id = self.max_var_id;
-        assert!(self.vars.insert(new_id, (false, expr)).is_none());
-        new_id
-    }
-
     fn eval(&mut self, mut expr: Expr) -> Result<Expr> {
+        self.eval_count += 1;
         loop {
             match expr {
                 Ap(left, right, false) => {
@@ -597,6 +562,8 @@ impl Galaxy {
         fn evaled_ap(e0: Expr, e1: Expr) -> Result<Expr> {
             Ok(Ap(Box::new(e0), Box::new(e1), true))
         }
+
+        self.apply_count += 1;
 
         trace!("apply: f: {:?}, x0: {:?}", f, x0);
         match self.eval(f)? {
@@ -677,27 +644,13 @@ impl Galaxy {
                         let (e0, e1, e2): (Expr, Expr, Expr) = (*e, e0, e1);
                         match self.eval(*exp)? {
                             S => {
-                                trace!("expand s-combinator: {:?}", (&e0, &e1, &e2));
                                 // ap ap ap s x0 x1 x2   =   ap ap x0 x2 ap x1 x2
                                 // ap ap ap s add inc 1   =   3
-                                // let e2: Expr = {
-                                //     if e2.evaluated {
-                                //         e2
-                                //     } else if let Ap(_, _) = &e2.expr {
-                                //         Var(self.add_new_var(e2.expr)).into()
-                                //     } else {
-                                //         e2
-                                //     }
-                                // };
-
                                 let e2: Expr = if let Ap(_, _, false) = &e2 {
-                                    Var(self.add_new_var(e2))
+                                    Var(self.variables.insert_new(e2))
                                 } else {
                                     e2
                                 };
-
-                                trace!("s-combin!ator: E2: {:?}", e2);
-
                                 let ap_x0_x2 = ap(e0, e2.clone());
                                 let ap_x1_x2 = ap(e1, e2);
                                 // Ok(ap(ap_x0_x2, ap_x1_x2))
@@ -886,6 +839,7 @@ mod tests {
     #[test]
     fn eval_cons_test() -> Result<()> {
         // car, cdr, cons
+
         // car
         // ap car ap ap cons x0 x1   =   x0
         // ap car x2   =   ap x2 t
@@ -957,47 +911,6 @@ mod tests {
     }
 
     #[test]
-    fn eval_recursive_func_1141_test() -> Result<()> {
-        // init_env_logger();
-
-        // :1141 = ap ap c b ap ap s ap ap b c ap ap b ap b b ap eq 0 ap ap b ap c :1141 ap add -1
-
-        // Ap(Ap(C, B),
-        //    Ap(Ap(S,
-        //          Ap(Ap(B, C),
-        //             Ap(Ap(B, Ap(B, B)),
-        //                Ap(Eq, Num(0))))),
-        //       Ap(Ap(B,
-        //             Ap(C,
-        //                Var(1141))),
-        //          Ap(Add, Num(-1)))))
-
-        let src = ":1141 = ap ap c b ap ap s ap ap b c ap ap b ap b b ap eq 0 ap ap b ap c :1141 ap add -1
-    galaxy = :1141
-    ";
-        let result = eval_galaxy_src(&src)?;
-        assert_eq!(
-                format!("{:?}", result),
-                "Ap(Ap(C, B), Ap(Ap(S, Ap(Ap(B, C), Ap(Ap(B, Ap(B, B)), Ap(Eq, Num(0))))), Ap(Ap(B, Ap(C, Var(1141))), Ap(Add, Num(-1)))))");
-        Ok(())
-    }
-
-    #[test]
-    fn eval_galaxy_test() -> Result<()> {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("task/galaxy.txt");
-        let src = std::fs::read_to_string(path)?.trim().to_string();
-
-        let result = eval_galaxy_src(&src)?;
-        // println!("galaxy result: {:?}", result);
-        assert_eq!(
-            format!("{:?}", result),
-            "Ap(Ap(C, Ap(Ap(B, C), Ap(Ap(C, Ap(Ap(B, C), Var(1342))), Var(1328)))), Var(1336))"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn interact_galaxy_test() -> Result<()> {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("task/galaxy.txt");
@@ -1006,82 +919,70 @@ mod tests {
         let mut galaxy = Galaxy::new(&src)?;
         let res = galaxy.interact_galaxy(Nil, ap(ap(Cons, Num(0)), Num(0)))?;
         assert_eq!(
-            format!("{:?}", res),
-            "Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Nil)), Ap(Ap(Cons, Num(0)), Ap(Ap(Cons, Nil), Nil))))), Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(2)), Num(-2))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-2)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(3)), Num(-1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-3)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(3)), Num(0))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-3)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(2)), Num(1))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-2)), Num(2))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-1)), Num(3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(0)), Num(3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(1)), Num(3))), Nil))))))))))))))))))))), Ap(Ap(Cons, Ap(Ap(Cons, Ap(Ap(Cons, Num(-7)), Num(-3))), Ap(Ap(Cons, Ap(Ap(Cons, Num(-8)), Num(-2))), Nil))), Ap(Ap(Cons, Nil), Nil)))), Nil)))"
+            format!("{}", Mod::new(res.clone())?),
+            "(0, ((0, ((0, nil), (0, (nil, nil)))), ((((-1, -3), ((0, -3), ((1, -3), ((2, -2), ((-2, -1), ((-1, -1), ((0, -1), ((3, -1), ((-3, 0), ((-1, 0), ((1, 0), ((3, 0), ((-3, 1), ((0, 1), ((1, 1), ((2, 1), ((-2, 2), ((-1, 3), ((0, 3), ((1, 3), nil)))))))))))))))))))), (((-7, -3), ((-8, -2), nil)), (nil, nil))), nil)))"
         );
+
         let interact_result = InteractResult::new(res)?;
         assert_eq!(interact_result.flag, Num(0));
         Ok(())
     }
 
     #[test]
-    fn list_destruction_test() -> Result<()> {
-        assert_eq!(list_destruction(Nil)?, Vec::new());
+    fn into_vec_test() -> Result<()> {
+        assert_eq!(Nil.into_vec()?, Vec::new());
+        assert_eq!(parse_src("ap ap cons 1 nil")?.into_vec()?, vec![Num(1)]);
         assert_eq!(
-            list_destruction(parse_src("ap ap cons 1 nil")?)?,
-            vec![Num(1)]
-        );
-        assert_eq!(
-            list_destruction(parse_src("ap ap cons 1 ap ap cons 2 nil")?)?,
+            parse_src("ap ap cons 1 ap ap cons 2 nil")?.into_vec()?,
             vec![Num(1), Num(2)]
         );
         assert_eq!(
-            list_destruction(parse_src("ap ap cons 1 ap ap cons 2 ap ap cons 3 nil")?)?,
+            parse_src("ap ap cons 1 ap ap cons 2 ap ap cons 3 nil")?.into_vec()?,
             vec![Num(1), Num(2), Num(3)]
         );
-
-        // Ap(Ap(Cons, Num(0)), Nil)
-
-        assert_eq!(
-            list_destruction(parse_src("ap ap cons 0 nil")?)?,
-            vec![Num(0)]
-        );
+        assert_eq!(parse_src("ap ap cons 0 nil")?.into_vec()?, vec![Num(0)]);
 
         Ok(())
     }
 
     #[test]
-    fn modulate_num_test() {
-        assert_eq!(modulate_num(0), "010");
-        assert_eq!(modulate_num(1), "01100001");
-        assert_eq!(modulate_num(2), "01100010");
-        assert_eq!(modulate_num(15), "01101111");
-        assert_eq!(modulate_num(16), "0111000010000");
-        assert_eq!(modulate_num(255), "0111011111111");
-        assert_eq!(modulate_num(256), "011110000100000000");
-        assert_eq!(modulate_num(-1), "10100001");
-        assert_eq!(modulate_num(-2), "10100010");
+    fn modulate_num_test() -> Result<()> {
+        assert_eq!(0.modulate()?, "010");
+        assert_eq!(1.modulate()?, "01100001");
+        assert_eq!(2.modulate()?, "01100010");
+        assert_eq!(15.modulate()?, "01101111");
+        assert_eq!(16.modulate()?, "0111000010000");
+        assert_eq!(255.modulate()?, "0111011111111");
+        assert_eq!(256.modulate()?, "011110000100000000");
+        assert_eq!((-1).modulate()?, "10100001");
+        assert_eq!((-2).modulate()?, "10100010");
+        Ok(())
     }
 
     #[test]
     fn modulate_expr_test() -> Result<()> {
-        assert_eq!(modulate_expr(parse_src("nil")?)?, "00");
-
-        assert_eq!(modulate_expr(parse_src("ap ap cons nil nil")?)?, "110000");
-
-        assert_eq!(modulate_expr(parse_src("ap ap cons 0 nil")?)?, "1101000");
-
+        assert_eq!(parse_src("nil")?.modulate()?, "00");
+        assert_eq!(parse_src("ap ap cons nil nil")?.modulate()?, "110000");
+        assert_eq!(parse_src("ap ap cons 0 nil")?.modulate()?, "1101000");
         assert_eq!(
-            modulate_expr(parse_src("ap ap cons 1 2")?)?,
+            parse_src("ap ap cons 1 2")?.modulate()?,
             "110110000101100010"
         );
-
         assert_eq!(
-            modulate_expr(parse_src("ap ap cons 1 ap ap cons 2 nil")?)?,
+            parse_src("ap ap cons 1 ap ap cons 2 nil")?.modulate()?,
             "1101100001110110001000"
         );
-
         Ok(())
     }
 
     #[test]
     fn demodulate_test() -> Result<()> {
-        assert_eq!(demodulate("010")?, Num(0));
-        assert_eq!(demodulate("01100001")?, Num(1));
-        assert_eq!(demodulate("10100001")?, Num(-1));
-        assert_eq!(demodulate("110000")?, ap(ap(Cons, Nil), Nil));
+        assert_eq!("010".demodulate()?, Num(0));
+        assert_eq!("01100001".demodulate()?, Num(1));
+        assert_eq!("10100001".demodulate()?, Num(-1));
+        assert_eq!("110000".demodulate()?, ap(ap(Cons, Nil), Nil));
         assert_eq!(
-            demodulate("1101100001110110001000")?,
+            "1101100001110110001000".demodulate()?,
             ap(ap(Cons, Num(1)), ap(ap(Cons, Num(2)), Nil))
         );
         Ok(())
