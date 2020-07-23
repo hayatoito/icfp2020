@@ -120,7 +120,7 @@ impl Expr {
         }
     }
 
-    fn to_vec(self: &Rc<Self>) -> Result<Vec<Rc<Expr>>> {
+    fn convert_to_vec(self: &Rc<Self>) -> Result<Vec<Rc<Expr>>> {
         let mut expr = self.clone();
         let mut list = Vec::new();
         while let Some((x, xs)) = expr.destruct_cons()? {
@@ -130,11 +130,11 @@ impl Expr {
         Ok(list)
     }
 
-    fn to_screen(self: &Rc<Self>) -> Result<Screen> {
+    fn convert_to_screen(self: &Rc<Self>) -> Result<Screen> {
         let mut screen = Screen::new();
-        for image_expr in self.to_vec()? {
+        for image_expr in self.convert_to_vec()? {
             let mut image = Image::new();
-            for p in image_expr.to_vec()? {
+            for p in image_expr.convert_to_vec()? {
                 if let Some((x, y)) = p.destruct_cons()? {
                     if let (Num(x), Num(y)) = (x.as_ref(), y.as_ref()) {
                         image.push((*x, *y));
@@ -316,7 +316,7 @@ struct InteractResult {
 
 impl InteractResult {
     fn new(expr: Rc<Expr>) -> Result<InteractResult> {
-        let list = expr.to_vec()?;
+        let list = expr.convert_to_vec()?;
         assert_eq!(list.len(), 3);
         let mut iter = list.into_iter();
         Ok(InteractResult {
@@ -454,7 +454,7 @@ impl Galaxy {
                 self.eval_count,
                 self.apply_count
             );
-            let _screen = images.to_screen()?;
+            let _screen = images.convert_to_screen()?;
             state = new_state;
         }
         assert_eq!(
@@ -504,7 +504,7 @@ impl Galaxy {
             info!("Interact with {:?}", (x, y));
             let event = ap(ap(Rc::new(Cons), Rc::new(Num(x))), Rc::new(Num(y)));
             let (new_state, images) = self.interact(state, event)?;
-            let screen = images.to_screen()?;
+            let screen = images.convert_to_screen()?;
             screen_sender.send(screen)?;
             state = new_state;
         }
@@ -965,11 +965,8 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                parse_src(src)?.to_vec()?,
-                v.into_iter()
-                    .cloned()
-                    .map(|e| Rc::new(e))
-                    .collect::<Vec<_>>()
+                parse_src(src)?.convert_to_vec()?,
+                v.iter().cloned().map(Rc::new).collect::<Vec<_>>()
             );
         }
         Ok(())

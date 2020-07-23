@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<head></head>
+<canvas id="canvas"></canvas>
+<script>
+  const scale = 5;
+  const size = scale;
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  let xmin = 0;
+  let ymin = 0;
+
+  let screen = [];
+
+  (async () => {
+    await fetch_data();
+  })();
+
+  function screen_equal(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; ++i) {
+      if (a[i].length !== b[i].length) return false;
+      for (var j = 0; i < a[i].length; ++j) {
+        if (a[i][j][0] !== b[i][j][0] || a[i][j][1] !== b[i][j][1]) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  async function fetch_data() {
+    const response = await fetch("/screen");
+    let new_screen = await response.json();
+
+    if (screen_equal(screen, new_screen)) {
+      return;
+    }
+    screen = new_screen;
+    console.log("screen", screen);
+
+    xmin = 0;
+    ymin = 0;
+    let xmax = 0;
+    let ymax = 0;
+
+    for (const image of screen) {
+      for (const point of image) {
+        xmin = Math.min(xmin, point[0]);
+        xmax = Math.max(xmax, point[0]);
+        ymin = Math.min(ymin, point[1]);
+        ymax = Math.max(ymax, point[1]);
+      }
+    }
+
+    canvas.width = (xmax - xmin) * scale;
+    canvas.height = (ymax - ymin) * scale;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "black";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    let color = [
+      "rgba(255, 255, 255, 1)",
+      "rgba(200, 200, 150, 0.9)",
+      "rgba(200, 150, 200, 0.9)",
+      "rgba(150, 200, 200, 0.9)",
+      "rgba(255, 0, 0, 0.9)",
+      "rgba(0, 255, 0, 0.9)",
+      "rgba(0, 0, 255, 0.9)"
+    ];
+
+    for (const [i, image] of screen.entries()) {
+      ctx.fillStyle = color[i % color.length];
+      draw_image(image);
+    }
+  }
+
+  function draw_image(image) {
+    for (const point of image) {
+      let x = point[0] - xmin;
+      let y = point[1] - ymin;
+      ctx.fillRect(x * scale, y * scale, size, size);
+    }
+  }
+
+  canvas.addEventListener("click", event => {
+    console.log("click", event);
+
+    let sx = event.x - canvas.offsetLeft;
+    let sy = event.y - canvas.offsetTop;
+
+    let rx = Math.floor(sx / scale) + xmin;
+    let ry = Math.floor(sy / scale) + ymin;
+
+    console.log(rx, ry);
+    fetch("/click/" + rx + "/" + ry);
+  });
+
+  // TODO: Use websockat, instead of polling.
+  window.setInterval(() => {
+    (async () => {
+      await fetch_data();
+    })();
+  }, 100);
+</script>
