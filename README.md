@@ -37,7 +37,7 @@ Browser <--( HTTP )--> Galaxy Evaluater <--( HTTP )--> Alien Proxy <--( unknown 
    This runs `cargo run --release --bin app interact` with some configutations.
    See [`Makefile`](./Makefile) for the detail.
 
-3. Open `http://localhost:9999/gamepad.html` in your browser. You will see a
+3. Open `http://localhost:9999/galaxypad.html` in your browser. You will see a
    _clickable_ galaxy map as a starting point, like the following:
 
    ![galaxy](./task/galaxy.png)

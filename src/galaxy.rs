@@ -9,6 +9,7 @@ use std::rc::Rc;
 pub enum Expr {
     Ap(Rc<Expr>, Rc<Expr>, bool),
     Var(usize),
+    // TODO: Use i128
     Num(i64),
     Add,
     Mul,
@@ -704,8 +705,6 @@ impl Galaxy {
 }
 
 pub fn eval_src(src: &str) -> Result<Rc<Expr>> {
-    // let exp = parse_src(src)?;
-    // eval(exp)
     let mut galaxy = Galaxy::new_for_test(src)?;
     galaxy.eval_galaxy()
 }
